@@ -11,7 +11,7 @@ Local proof of concept for motor-insurance claim document validation. It does **
 - required-document completeness
 - `VALID`, `WRONG_DOCUMENT`, `NEEDS_REVIEW`, `UNREADABLE`, and `DUPLICATE` results
 
-The initial classifier is deterministic and explainable, using document-text indicators. It is intentionally designed to be replaced by OCR/Azure Document Intelligence in a later phase.
+The initial classifier is deterministic and explainable, using document-text indicators. It classifies text-based PDFs. A scanned/image-only PDF is returned as `NEEDS_REVIEW` with an OCR requirement; it is not treated as a wrong document. Azure Document Intelligence should replace this fallback in the production IDP pipeline.
 
 ## Run locally (PowerShell)
 
@@ -42,6 +42,16 @@ For production, configure authentication/authorization, a managed object store, 
 ```powershell
 & $py -m pytest -q
 ```
+
+## Synthetic PDF test pack
+
+Generate eight clearly labelled synthetic PDFs (claim form, RC, policy, driving licence, FIR, garage estimate, repair invoice, and accident-photo placeholder):
+
+```powershell
+& $py scripts/generate_synthetic_claim_pack.py
+```
+
+The generated files are saved under `sample_data/motor_claim_clm_demo_001/`. They contain no real personal, vehicle, policy, or financial data. Upload them through the local page and select the matching expected document type for each file.
 
 ## Supported document types
 

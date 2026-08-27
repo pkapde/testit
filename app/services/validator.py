@@ -32,7 +32,7 @@ def _extract_text(item: IncomingFile) -> tuple[str | None, str | None]:
         try:
             from pypdf import PdfReader
             text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(item.content)).pages)
-            return text, None if text.strip() else "PDF contains no extractable text"
+            return text, None if text.strip() else "PDF has no extractable text. It may be a scanned PDF and requires OCR."
         except Exception:
             return None, "PDF could not be read"
     return None, "Image OCR is not configured; route this file for review"
@@ -48,7 +48,8 @@ def validate_claim(claim_id: str, items: Iterable[IncomingFile], required_docume
         hashes[digest] = item.name
         text, error = _extract_text(item)
         if error:
-            results.append(FileValidationResult(file_name=item.name, expected_document=item.expected, status=FileStatus.NEEDS_REVIEW if "OCR" in error else FileStatus.UNREADABLE, message=error, classification_confidence=0.0))
+            review_required = "OCR" in error
+            results.append(FileValidationResult(file_name=item.name, expected_document=item.expected, status=FileStatus.NEEDS_REVIEW if review_required else FileStatus.UNREADABLE, message=error, classification_confidence=0.0))
             continue
         detected, confidence, evidence = classify_text(text or "")
         if detected == DocumentType.UNKNOWN or confidence < settings.classification_review_threshold:
