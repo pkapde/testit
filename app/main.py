@@ -1,12 +1,41 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import HTMLResponse
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 
 configure_logging()
-app = FastAPI(title=settings.app_name, version="0.1.0", description="Motor claim document validator")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    from app.infrastructure.postgres import initialize_database
+    initialize_database()
+    yield
+
+
+app = FastAPI(title=settings.app_name, version="0.1.0", description="Motor claim document validator", lifespan=lifespan)
 app.include_router(api_router)
+
+
+def custom_openapi() -> dict:
+    """Make multi-file fields render as file pickers in Swagger UI."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    for component in schema.get("components", {}).get("schemas", {}).values():
+        files = component.get("properties", {}).get("files")
+        items = files.get("items", {}) if files else {}
+        if items.get("contentMediaType"):
+            items["format"] = "binary"
+            items.pop("contentMediaType", None)
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)

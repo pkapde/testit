@@ -32,10 +32,21 @@ def _extract_text(item: IncomingFile) -> tuple[str | None, str | None]:
         try:
             from pypdf import PdfReader
             text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(item.content)).pages)
-            return text, None if text.strip() else "PDF has no extractable text. It may be a scanned PDF and requires OCR."
+            if text.strip():
+                return text, None
         except Exception:
             return None, "PDF could not be read"
-    return None, "Image OCR is not configured; route this file for review"
+    if settings.document_intelligence_endpoint:
+        try:
+            from app.infrastructure.document_intelligence import extract_document_text
+            text = extract_document_text(item.content)
+            return text, None if text.strip() else "OCR returned no readable text; manual review required"
+        except Exception:
+            return None, "OCR could not read this document; manual review required"
+    if extension == ".pdf":
+        return None, "PDF has no extractable text. It may be a scanned PDF and requires OCR."
+    # An image can still be classified by a vision-capable Azure OpenAI deployment.
+    return "", None
 
 
 def validate_claim(claim_id: str, items: Iterable[IncomingFile], required_documents: list[DocumentType] | None = None) -> ClaimValidationResult:
@@ -52,6 +63,16 @@ def validate_claim(claim_id: str, items: Iterable[IncomingFile], required_docume
             results.append(FileValidationResult(file_name=item.name, expected_document=item.expected, status=FileStatus.NEEDS_REVIEW if review_required else FileStatus.UNREADABLE, message=error, classification_confidence=0.0))
             continue
         detected, confidence, evidence = classify_text(text or "")
+        extension = Path(item.name).suffix.lower()
+        use_ai_fallback = extension in {".jpg", ".jpeg", ".png"} or detected == DocumentType.UNKNOWN or confidence < settings.classification_review_threshold
+        if use_ai_fallback:
+            from app.infrastructure.azure_openai import classify_document, is_configured
+            ai_result = classify_document(file_name=item.name, content=item.content, extracted_text=text or "")
+            if ai_result:
+                detected, confidence, evidence = ai_result
+                evidence = ["Azure OpenAI fallback classification"] + evidence
+            elif detected == DocumentType.UNKNOWN and is_configured():
+                evidence = ["Azure OpenAI classification did not return a usable result"]
         if detected == DocumentType.UNKNOWN or confidence < settings.classification_review_threshold:
             status, message = FileStatus.NEEDS_REVIEW, "Document type is ambiguous; manual review required"
         elif item.expected and detected != item.expected:
