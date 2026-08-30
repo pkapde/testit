@@ -1,10 +1,13 @@
 """Azure OpenAI tools used only when deterministic classification is insufficient."""
 import base64
 import json
+import logging
 from pathlib import Path
 
 from app.core.config import settings
 from app.schemas.documents import DocumentType
+
+logger = logging.getLogger(__name__)
 
 EXTRACTION_FIELDS: dict[DocumentType, tuple[str, ...]] = {
     DocumentType.CLAIM_FORM: ("claim_number", "person_name", "vehicle_registration", "accident_date", "accident_details"),
@@ -22,6 +25,11 @@ EXTRACTION_FIELDS: dict[DocumentType, tuple[str, ...]] = {
 def is_configured() -> bool:
     """Return whether a deployment and endpoint are available for AI classification."""
     return bool(settings.azure_openai_endpoint and settings.azure_openai_deployment)
+
+
+def _log_provider_failure(operation: str, error: Exception) -> None:
+    """Log diagnosable provider failures without logging secrets or claim content."""
+    logger.warning("Azure OpenAI %s failed: %s: %s", operation, type(error).__name__, str(error))
 
 
 def classify_document(*, file_name: str, content: bytes, extracted_text: str) -> tuple[DocumentType, float, list[str]] | None:
@@ -70,10 +78,12 @@ def classify_document(*, file_name: str, content: bytes, extracted_text: str) ->
         confidence = max(0.0, min(1.0, float(payload.get("confidence", 0.0))))
         evidence = [str(item) for item in payload.get("evidence", [])][:5]
         return detected, round(confidence, 2), evidence
-    except (ValueError, TypeError, json.JSONDecodeError):
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        _log_provider_failure("document classification", exc)
         return None
-    except Exception:
+    except Exception as exc:
         # Classification is advisory. A provider failure must never mark a claim valid.
+        _log_provider_failure("document classification", exc)
         return None
 
 
@@ -117,16 +127,19 @@ def extract_document_fields(*, file_name: str, document_type: DocumentType, extr
         payload = json.loads(response.choices[0].message.content or "{}")
         raw_fields = payload.get("fields")
         if not isinstance(raw_fields, dict):
+            logger.warning("Azure OpenAI structured extraction returned no fields object")
             return None
         return {
             key: str(value).strip()[:500]
             for key, value in raw_fields.items()
             if key in allowed_fields and value is not None and str(value).strip().lower() not in {"", "n/a", "na", "unknown", "null"}
         }
-    except (ValueError, TypeError, json.JSONDecodeError):
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        _log_provider_failure("structured extraction", exc)
         return None
-    except Exception:
+    except Exception as exc:
         # An advisory model failure never blocks deterministic processing.
+        _log_provider_failure("structured extraction", exc)
         return None
 
 
@@ -162,6 +175,7 @@ def assess_cross_document_consistency(extracted_fields: dict[str, dict[str, str]
         payload = json.loads(response.choices[0].message.content or "{}")
         findings = payload.get("findings")
         if not isinstance(findings, list):
+            logger.warning("Azure OpenAI cross-document review returned no findings list")
             return None
         safe_findings = []
         for finding in findings[:10]:
@@ -177,7 +191,9 @@ def assess_cross_document_consistency(extracted_fields: dict[str, dict[str, str]
             if assessment in {"CONSISTENT", "INCONSISTENT", "NEEDS_REVIEW"} and field and rationale:
                 safe_findings.append({"field": field, "assessment": assessment, "confidence": confidence, "rationale": rationale})
         return safe_findings
-    except (ValueError, TypeError, json.JSONDecodeError):
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        _log_provider_failure("cross-document review", exc)
         return None
-    except Exception:
+    except Exception as exc:
+        _log_provider_failure("cross-document review", exc)
         return None
