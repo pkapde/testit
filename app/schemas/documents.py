@@ -46,6 +46,7 @@ class ClaimValidationResult(BaseModel):
 
 class TriageQueue(str, Enum):
     DOCUMENT_VERIFICATION = "DOCUMENT_VERIFICATION"
+    FRAUD_REVIEW = "FRAUD_REVIEW"
     READY_FOR_EXTRACTION = "READY_FOR_EXTRACTION"
     CLAIMS_OFFICER = "CLAIMS_OFFICER"
 
@@ -103,6 +104,19 @@ class AgenticFinding(BaseModel):
     rationale: str
 
 
+class FraudRiskLevel(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class FraudFinding(BaseModel):
+    rule_id: str
+    severity: str
+    message: str
+    evidence: dict[str, str] = Field(default_factory=dict)
+
+
 class ClaimTriageResult(BaseModel):
     validation: ClaimValidationResult
     extracted_fields: dict[str, dict[str, str]]
@@ -110,5 +124,7 @@ class ClaimTriageResult(BaseModel):
     field_validation_issues: list[FieldValidationIssue] = Field(default_factory=list)
     cross_document_issues: list[CrossDocumentIssue] = Field(default_factory=list)
     agentic_findings: list[AgenticFinding] = Field(default_factory=list)
+    fraud_risk_level: FraudRiskLevel = FraudRiskLevel.LOW
+    fraud_findings: list[FraudFinding] = Field(default_factory=list)
     routing_queue: TriageQueue
     routing_reason: str

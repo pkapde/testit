@@ -22,6 +22,14 @@ def validate_documents(state: ClaimWorkflowState) -> ClaimWorkflowState:
 
 def triage_documents(state: ClaimWorkflowState) -> ClaimWorkflowState:
     result = build_triage_result(state["validation"], state["items"])
+    return {"triage": result}
+
+
+def detect_fraud(state: ClaimWorkflowState) -> ClaimWorkflowState:
+    """Phase 3 fraud-risk agent; records explainable indicators before routing."""
+    from app.services.fraud import apply_fraud_assessment
+
+    result = apply_fraud_assessment(state["triage"])
     return {"triage": result, "trace_id": trace_triage(result)}
 
 
@@ -29,6 +37,8 @@ def route_human_stage(state: ClaimWorkflowState) -> Literal["document_verificati
     queue = state["triage"].routing_queue
     if queue == TriageQueue.DOCUMENT_VERIFICATION:
         return "document_verification"
+    if queue == TriageQueue.FRAUD_REVIEW:
+        return "fraud_review"
     if queue == TriageQueue.CLAIMS_OFFICER:
         return "claims_officer"
     return "ready_for_extraction"
@@ -42,6 +52,10 @@ def claims_officer(_: ClaimWorkflowState) -> ClaimWorkflowState:
     return {"human_stage": "HUMAN_REVIEW_2_CLAIMS_OFFICER"}
 
 
+def fraud_review(_: ClaimWorkflowState) -> ClaimWorkflowState:
+    return {"human_stage": "HUMAN_REVIEW_1_FRAUD_REVIEW"}
+
+
 def ready_for_extraction(_: ClaimWorkflowState) -> ClaimWorkflowState:
     return {"human_stage": "READY_FOR_EXTRACTION"}
 
@@ -50,14 +64,18 @@ def create_claim_workflow():
     graph = StateGraph(ClaimWorkflowState)
     graph.add_node("validate", validate_documents)
     graph.add_node("triage", triage_documents)
+    graph.add_node("fraud_detection", detect_fraud)
     graph.add_node("document_verification", document_verification)
     graph.add_node("claims_officer", claims_officer)
+    graph.add_node("fraud_review", fraud_review)
     graph.add_node("ready_for_extraction", ready_for_extraction)
     graph.add_edge(START, "validate")
     graph.add_edge("validate", "triage")
-    graph.add_conditional_edges("triage", route_human_stage)
+    graph.add_edge("triage", "fraud_detection")
+    graph.add_conditional_edges("fraud_detection", route_human_stage)
     graph.add_edge("document_verification", END)
     graph.add_edge("claims_officer", END)
+    graph.add_edge("fraud_review", END)
     graph.add_edge("ready_for_extraction", END)
     return graph.compile()
 

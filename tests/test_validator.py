@@ -55,3 +55,12 @@ def test_scanned_pdf_requires_review_instead_of_being_marked_unreadable():
     result = validate_claim("CLM-6", [IncomingFile("scanned.pdf", pdf.getvalue())])
     assert result.files[0].status == FileStatus.NEEDS_REVIEW
     assert "OCR" in result.files[0].message
+
+
+def test_agent_one_returns_classification_and_completeness_result():
+    result = validate_claim(
+        "CLM-7",
+        [file("fir.txt", "First Information Report FIR No police station complainant", DocumentType.FIR)],
+    )
+    assert result.files[0].detected_document == DocumentType.FIR
+    assert DocumentType.CLAIM_FORM in result.missing_documents

@@ -38,6 +38,12 @@ $py = 'C:\Users\mital\.cache\codex-runtimes\codex-primary-runtime\dependencies\p
 
 Open `http://127.0.0.1:8000/` for a simple local upload page, or `http://127.0.0.1:8000/docs` for API documentation. The API endpoint is `POST /api/v1/claims/{claim_id}/validate`. The multipart form field `expected_documents` is optional and accepts a comma-separated list in the same order as `files`, for example `rc,policy`.
 
+### ClaimShield UI integration
+
+The dedicated Agent 1 UI endpoint is `POST /api/v1/claims/{claim_id}/classification-completeness`. It accepts `multipart/form-data` with a `files` field and optional `expected_documents`, and returns file validation, document classification, duplicate detection, and required-document completeness.
+
+The ClaimShield frontend calls this endpoint during each upload. On submission it sends all selected files to `POST /api/v1/claims/{claim_id}/triage`, which executes Phase 1 plus Phase 2 extraction and consistency routing. Set `VITE_CONTRACTIQ_API_URL=http://127.0.0.1:8001` in the frontend `.env`, and set `CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000` in this backend's `.env` for local development.
+
 ## Project layout
 
 ```text

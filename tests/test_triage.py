@@ -23,11 +23,12 @@ def test_complete_consistent_claim_proceeds_to_extraction():
     assert not result.cross_document_issues
 
 
-def test_mismatched_vehicle_goes_to_claims_officer():
+def test_mismatched_vehicle_goes_to_fraud_review():
     items = complete_documents()
     items[-1] = document("estimate.txt", "Garage Estimate repair estimate estimated cost labour charges MH12XX9999")
     result = triage_claim("CLM-9", items)
-    assert result.routing_queue == TriageQueue.CLAIMS_OFFICER
+    assert result.routing_queue == TriageQueue.FRAUD_REVIEW
+    assert result.fraud_risk_level == "HIGH"
     assert result.cross_document_issues[0].field == "vehicle_registration"
 
 

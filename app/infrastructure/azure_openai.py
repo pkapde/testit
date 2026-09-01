@@ -197,3 +197,61 @@ def assess_cross_document_consistency(extracted_fields: dict[str, dict[str, str]
     except Exception as exc:
         _log_provider_failure("cross-document review", exc)
         return None
+
+
+def assess_fraud_hypotheses(extracted_fields: dict[str, dict[str, str]], deterministic_signals: list[dict[str, str]]) -> list[dict] | None:
+    """Generate advisory fraud-review hypotheses from sanitized claim facts.
+
+    This tool cannot make a fraud determination. Callers treat every returned
+    hypothesis as MEDIUM-risk human-review evidence only; deterministic rules
+    remain the sole source of HIGH-risk routing.
+    """
+    if not is_configured() or not extracted_fields:
+        return None
+    from openai import AzureOpenAI
+    from app.infrastructure.secrets import get_secret
+
+    api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
+    if not api_key:
+        return None
+    prompt = (
+        "You are an insurance fraud-investigation assistant. Review only the supplied structured extracted fields "
+        "and deterministic validation signals. Return JSON only: {\"hypotheses\": [{\"indicator\": string, \"confidence\": number 0..1, \"rationale\": string, \"recommended_review\": string}]}. "
+        "A hypothesis is not a fraud conclusion. Include an item only for a concrete inconsistency, anomaly, or evidence gap. "
+        "Never accuse a claimant, recommend rejection, calculate a payout, or invent facts. Keep each rationale and recommendation under 500 characters. "
+        f"Extracted fields: {json.dumps(extracted_fields, ensure_ascii=False)}\n"
+        f"Deterministic signals: {json.dumps(deterministic_signals, ensure_ascii=False)}"
+    )
+    try:
+        client = AzureOpenAI(azure_endpoint=settings.azure_openai_endpoint, api_key=api_key, api_version=settings.azure_openai_api_version)
+        response = client.chat.completions.create(
+            model=settings.azure_openai_deployment,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        hypotheses = payload.get("hypotheses")
+        if not isinstance(hypotheses, list):
+            logger.warning("Azure OpenAI fraud investigation returned no hypotheses list")
+            return None
+        safe_hypotheses = []
+        for hypothesis in hypotheses[:5]:
+            if not isinstance(hypothesis, dict):
+                continue
+            indicator = str(hypothesis.get("indicator", "")).strip()[:150]
+            rationale = str(hypothesis.get("rationale", "")).strip()[:500]
+            recommended_review = str(hypothesis.get("recommended_review", "")).strip()[:500]
+            try:
+                confidence = max(0.0, min(1.0, float(hypothesis.get("confidence", 0.0))))
+            except (TypeError, ValueError):
+                continue
+            if indicator and rationale and recommended_review:
+                safe_hypotheses.append({"indicator": indicator, "confidence": confidence, "rationale": rationale, "recommended_review": recommended_review})
+        return safe_hypotheses
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        _log_provider_failure("fraud investigation", exc)
+        return None
+    except Exception as exc:
+        _log_provider_failure("fraud investigation", exc)
+        return None
