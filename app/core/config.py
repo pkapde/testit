@@ -32,6 +32,8 @@ class Settings:
     langsmith_api_key: str | None = os.getenv("LANGSMITH_API_KEY")
     langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "contractiq")
     langsmith_api_key_secret_name: str | None = os.getenv("LANGSMITH_API_KEY_SECRET_NAME")
+    gemini_api_key: str | None = os.getenv("GEMINI_API_KEY")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 
 settings = Settings()
