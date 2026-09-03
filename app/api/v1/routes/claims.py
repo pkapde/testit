@@ -1,10 +1,72 @@
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from app.schemas.classification import ClassificationCategory, ClassificationResponse
 from app.schemas.documents import DocumentType, ReviewDecisionRequest
+from app.services.document_classifier import UploadedDoc, classify_documents_with_gemini
 from app.services.triage import triage_claim
 from app.services.validator import IncomingFile, validate_claim
 from app.services.workflow import run_claim_workflow
 
 router = APIRouter(prefix="/claims", tags=["claims"])
+
+
+@router.post(
+    "/classification",
+    response_model=ClassificationResponse,
+    summary="Classify document or accident photos using Gemini AI",
+    description=(
+        "Single API to classify uploaded file(s) against a target category_type using Gemini model. "
+        "Classifies survey_report (survey report motor insurance), repair_invoice, "
+        "repair_estimate (repair estimate details), insurance_policy, claim_form, "
+        "registration_certificate (RC), driving_licence (driver licence), or accident_photos (car pic four side). "
+        "Returns whether the document is valid for the category, along with description or error details if invalid. "
+        "Does not require a claim_id."
+    ),
+)
+async def classify_document(
+    category_type: str = Form(
+        ...,
+        description=(
+            "Target document category to validate against. Supported options: "
+            "survey_report (survey report motor insurance), repair_invoice, "
+            "repair_estimate (repair estimate details), insurance_policy, claim_form, "
+            "registration_certificate (rc), driving_licence (driver licence), accident_photos (car pic four side)."
+        ),
+    ),
+    files: list[UploadFile] = File(
+        ..., description="One or more uploaded document or image files for classification."
+    ),
+) -> ClassificationResponse:
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one file must be uploaded for classification.",
+        )
+
+    try:
+        norm_category = ClassificationCategory.normalize(category_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    uploaded_docs: list[UploadedDoc] = []
+    for file in files:
+        content = await file.read()
+        uploaded_docs.append(
+            UploadedDoc(
+                filename=file.filename or "unnamed",
+                content=content,
+                content_type=file.content_type,
+            )
+        )
+
+    response = await classify_documents_with_gemini(
+        category_type=norm_category,
+        files=uploaded_docs,
+    )
+
+    return response
 
 
 @router.post("/{claim_id}/validate")

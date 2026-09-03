@@ -66,12 +66,21 @@ def _session_factory() -> sessionmaker[Session]:
     return sessionmaker(engine, expire_on_commit=False)
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def initialize_database() -> None:
     """Create tables for a local proof-of-concept. Use Alembic migrations in deployment."""
     if not settings.database_url:
         return
-    engine = create_engine(settings.database_url, pool_pre_ping=True)
-    Base.metadata.create_all(engine)
+    try:
+        engine = create_engine(settings.database_url, pool_pre_ping=True)
+        Base.metadata.create_all(engine)
+    except Exception as exc:
+        logger.warning("Could not connect to PostgreSQL database (%s). Persistence routes will require a running database.", exc)
+
 
 
 @contextmanager
