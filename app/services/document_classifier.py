@@ -1,13 +1,15 @@
+import base64
+from io import BytesIO
 import json
 import logging
 import mimetypes
 from typing import NamedTuple
 
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+from openai import AzureOpenAI
+from pypdf import PdfReader
 
 from app.core.config import settings
+from app.infrastructure.secrets import get_secret
 from app.schemas.classification import (
     AccidentPhotoCoverage,
     ClassificationCategory,
@@ -30,36 +32,51 @@ def _determine_mime_type(filename: str, content_type: str | None) -> str:
     guess, _ = mimetypes.guess_type(filename)
     if guess:
         return guess
-    if filename.lower().endswith((".jpg", ".jpeg")):
+    lower = filename.lower()
+    if lower.endswith((".jpg", ".jpeg")):
         return "image/jpeg"
-    if filename.lower().endswith(".png"):
+    if lower.endswith(".png"):
         return "image/png"
-    if filename.lower().endswith(".webp"):
+    if lower.endswith(".webp"):
         return "image/webp"
-    if filename.lower().endswith(".pdf"):
+    if lower.endswith(".pdf"):
         return "application/pdf"
-    if filename.lower().endswith(".txt"):
+    if lower.endswith(".txt"):
         return "text/plain"
-    return "image/jpeg"  # default fallback for imagery
+    return "image/jpeg"
+
+
+def _extract_text_from_pdf(content: bytes) -> str:
+    """Extract text from PDF pages for text analysis."""
+    try:
+        reader = PdfReader(BytesIO(content))
+        pages_text = [page.extract_text() or "" for page in reader.pages]
+        return "\n".join(pages_text).strip()
+    except Exception as exc:
+        logger.warning("Failed to extract text from PDF: %s", exc)
+        return ""
 
 
 def _mock_classification_fallback(
     target_category: ClassificationCategory, files: list[UploadedDoc]
 ) -> ClassificationResponse:
-    """Fallback classifier when GEMINI_API_KEY is not configured or offline."""
+    """Fallback classifier when Azure OpenAI is not configured or offline."""
     assessments = []
     category_val = target_category.value
 
     # Quick heuristic check on mock file text / names for offline testing
     all_text = ""
     for file in files:
-        try:
-            text = file.content.decode("utf-8", errors="ignore").lower()
-        except Exception:
-            text = ""
+        mime = _determine_mime_type(file.filename, file.content_type)
+        if mime == "application/pdf":
+            text = _extract_text_from_pdf(file.content).lower()
+        else:
+            try:
+                text = file.content.decode("utf-8", errors="ignore").lower()
+            except Exception:
+                text = ""
         all_text += " " + text + " " + file.filename.lower()
 
-    # Document keyword indicators for offline mode
     indicators = {
         ClassificationCategory.SURVEY_REPORT: ["survey", "surveyor", "survey report", "loss assessment", "inspection report"],
         ClassificationCategory.REPAIR_INVOICE: ["invoice", "tax invoice", "bill", "gstin", "total value"],
@@ -75,8 +92,7 @@ def _mock_classification_fallback(
 
     target_keywords = indicators.get(target_category, [])
     matches = [kw for kw in target_keywords if kw in all_text]
-    
-    # Check if text obviously matches another category
+
     other_detected = None
     for cat, kws in indicators.items():
         if cat != target_category:
@@ -94,7 +110,7 @@ def _mock_classification_fallback(
                 filename=f.filename,
                 status="VALID" if is_valid else "INVALID",
                 detected_content=f"Detected content for {f.filename}",
-                notes="Analyzed via offline heuristic fallback (GEMINI_API_KEY not configured)",
+                notes="Analyzed via offline heuristic fallback (Azure OpenAI not configured)",
             )
         )
 
@@ -106,10 +122,14 @@ def _mock_classification_fallback(
         has_right = "right" in all_text or len(files) >= 4
         all_4 = has_front and has_rear and has_left and has_right
         missing = []
-        if not has_front: missing.append("front_view")
-        if not has_rear: missing.append("rear_view")
-        if not has_left: missing.append("left_side_view")
-        if not has_right: missing.append("right_side_view")
+        if not has_front:
+            missing.append("front_view")
+        if not has_rear:
+            missing.append("rear_view")
+        if not has_left:
+            missing.append("left_side_view")
+        if not has_right:
+            missing.append("right_side_view")
 
         coverage = AccidentPhotoCoverage(
             front_view=has_front,
@@ -128,17 +148,17 @@ def _mock_classification_fallback(
         detected_type=detected,
         confidence=0.85 if is_valid else 0.40,
         description=f"Offline evaluation for requested category '{category_val}'. "
-                    + ("Document matches expected type." if is_valid else f"Invalid document. Expected {category_val} but found {detected}."),
+        + ("Document matches expected type." if is_valid else f"Invalid document. Expected {category_val} but found {detected}."),
         error=error_msg,
         file_assessments=assessments,
         accident_photo_coverage=coverage,
     )
 
 
-async def classify_documents_with_gemini(
+async def classify_documents(
     category_type: str | ClassificationCategory, files: list[UploadedDoc]
 ) -> ClassificationResponse:
-    """Send uploaded files to Gemini model to non-deterministically classify if they match category_type."""
+    """Classify uploaded document files using Azure OpenAI model."""
     if isinstance(category_type, str):
         target_category = ClassificationCategory.normalize(category_type)
     else:
@@ -154,17 +174,18 @@ async def classify_documents_with_gemini(
             error="No files uploaded. Please upload at least one file.",
         )
 
-    api_key = settings.gemini_api_key
-    if not api_key:
-        logger.warning("GEMINI_API_KEY is not configured. Falling back to offline evaluation.")
+    api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
+    if not (settings.azure_openai_endpoint and api_key and settings.azure_openai_deployment):
+        logger.warning("Azure OpenAI is not configured. Falling back to offline evaluation.")
         return _mock_classification_fallback(target_category, files)
 
     try:
-        client = genai.Client(api_key=api_key)
-        
-        contents: list[types.Part | str] = []
+        client = AzureOpenAI(
+            azure_endpoint=settings.azure_openai_endpoint,
+            api_key=api_key,
+            api_version=settings.azure_openai_api_version,
+        )
 
-        # Prepare system instructions & task prompt
         prompt = f"""
 You are an expert document and vehicle damage classifier for a motor insurance system.
 The user wants to classify uploaded file(s) for the requested category: '{target_category.value}'.
@@ -217,47 +238,52 @@ Return ONLY valid JSON matching this schema:
 }}
 Note: `accident_photo_coverage` should be included if requested category is `accident_photos`, otherwise set it to null.
 """
-        contents.append(prompt)
+        content_parts: list[dict] = [{"type": "text", "text": prompt}]
 
-        # Attach file parts
         for file in files:
             mime = _determine_mime_type(file.filename, file.content_type)
-            if mime.startswith("image/") or mime == "application/pdf":
-                contents.append(
-                    types.Part.from_bytes(
-                        data=file.content,
-                        mime_type=mime,
-                    )
-                )
+            if mime.startswith("image/"):
+                b64_str = base64.b64encode(file.content).decode("ascii")
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime};base64,{b64_str}",
+                        "detail": "low",
+                    },
+                })
+            elif mime == "application/pdf":
+                pdf_text = _extract_text_from_pdf(file.content)
+                content_parts.append({
+                    "type": "text",
+                    "text": f"File '{file.filename}' (PDF text excerpt):\n{pdf_text[:8000] if pdf_text else '[PDF could not be OCR-read directly]'}",
+                })
             else:
-                # Text or other format
                 try:
                     text_str = file.content.decode("utf-8", errors="ignore")
-                    contents.append(f"File '{file.filename}':\n{text_str}")
+                    content_parts.append({
+                        "type": "text",
+                        "text": f"File '{file.filename}' (text):\n{text_str[:8000]}",
+                    })
                 except Exception:
-                    contents.append(
-                        types.Part.from_bytes(data=file.content, mime_type="application/octet-stream")
-                    )
+                    content_parts.append({
+                        "type": "text",
+                        "text": f"File '{file.filename}' [binary file]",
+                    })
 
-        model_name = settings.gemini_model or "gemini-3.6-flash"
-        
-        response = client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
+        response = client.chat.completions.create(
+            model=settings.azure_openai_deployment,
+            messages=[{"role": "user", "content": content_parts}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
         )
 
-        response_text = response.text or "{}"
+        response_text = response.choices[0].message.content or "{}"
         data = json.loads(response_text)
 
-        # Parse response into Pydantic model
         is_valid = bool(data.get("is_valid", False))
         detected_type = data.get("detected_type", "unknown")
         confidence = float(data.get("confidence", 0.9 if is_valid else 0.3))
-        description = data.get("description", "Gemini document classification performed.")
+        description = data.get("description", "Azure OpenAI document classification performed.")
         error_text = data.get("error")
 
         if not is_valid and not error_text:
@@ -273,7 +299,6 @@ Note: `accident_photo_coverage` should be included if requested category is `acc
             for idx, item in enumerate(data.get("file_assessments", []))
         ]
 
-        # If file_assessments were not returned per file, populate defaults
         if not file_assessments:
             file_assessments = [
                 FileAssessment(
@@ -308,23 +333,17 @@ Note: `accident_photo_coverage` should be included if requested category is `acc
             accident_photo_coverage=coverage,
         )
 
-    except APIError as exc:
-        logger.error(f"Gemini API Error: {exc}")
-        return ClassificationResponse(
-            is_valid=False,
-            category_type=target_category.value,
-            detected_type="error",
-            confidence=0.0,
-            description="Gemini API invocation failed.",
-            error=f"Gemini API Error: {exc.message if hasattr(exc, 'message') else str(exc)}",
-        )
     except Exception as exc:
-        logger.exception(f"Unexpected error classifying document with Gemini: {exc}")
+        logger.exception("Azure OpenAI classification failed: %s", exc)
         return ClassificationResponse(
             is_valid=False,
             category_type=target_category.value,
             detected_type="error",
             confidence=0.0,
-            description="Internal classification error occurred.",
+            description="Azure OpenAI classification failed.",
             error=f"Classification error: {str(exc)}",
         )
+
+
+# Backward compatibility alias
+classify_documents_with_gemini = classify_documents
