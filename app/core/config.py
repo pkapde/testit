@@ -15,6 +15,13 @@ class Settings:
     classification_review_threshold: float = float(os.getenv("CLASSIFICATION_REVIEW_THRESHOLD", "0.70"))
     estimate_invoice_variance_threshold: float = float(os.getenv("ESTIMATE_INVOICE_VARIANCE_THRESHOLD", "0.20"))
     max_upload_size_bytes: int = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", "10485760"))
+    # Comma-separated browser origins permitted to call the API. Keep this
+    # explicit in production instead of using a wildcard with credentials.
+    cors_origins: tuple[str, ...] = tuple(
+        origin.strip()
+        for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+        if origin.strip()
+    )
     database_url: str | None = os.getenv("DATABASE_URL")
     azure_key_vault_url: str | None = os.getenv("AZURE_KEY_VAULT_URL")
     database_url_secret_name: str | None = os.getenv("DATABASE_URL_SECRET_NAME")

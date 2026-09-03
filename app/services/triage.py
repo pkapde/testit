@@ -279,4 +279,6 @@ def build_triage_result(validation, items: list[IncomingFile]) -> ClaimTriageRes
 
 
 def triage_claim(claim_id: str, items: list[IncomingFile]) -> ClaimTriageResult:
-    return build_triage_result(validate_claim(claim_id, items), items)
+    from app.services.fraud import apply_fraud_assessment
+
+    return apply_fraud_assessment(build_triage_result(validate_claim(claim_id, items), items))

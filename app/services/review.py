@@ -36,8 +36,8 @@ def _to_response(task: ReviewTaskRecord) -> ReviewTaskResponse:
 
 
 def create_document_review_task(result: ClaimTriageResult) -> ReviewTaskResponse | None:
-    """Persist a review task only when triage pauses at Human Review #1."""
-    if result.routing_queue.value != "DOCUMENT_VERIFICATION":
+    """Persist a Human Review #1 task for document or high-risk fraud routing."""
+    if result.routing_queue.value not in {"DOCUMENT_VERIFICATION", "FRAUD_REVIEW"}:
         return None
     evidence = {
         "validation": result.validation.model_dump(mode="json"),
@@ -46,10 +46,15 @@ def create_document_review_task(result: ClaimTriageResult) -> ReviewTaskResponse
         "agentic_findings": [finding.model_dump(mode="json") for finding in result.agentic_findings],
     }
     with session_scope() as session:
+        stage = (
+            "HUMAN_REVIEW_1_FRAUD_REVIEW"
+            if result.routing_queue.value == "FRAUD_REVIEW"
+            else "HUMAN_REVIEW_1_DOCUMENT_VERIFICATION"
+        )
         task = ReviewTaskRecord(
             task_id=str(uuid4()),
             claim_id=result.validation.claim_id,
-            stage="HUMAN_REVIEW_1_DOCUMENT_VERIFICATION",
+            stage=stage,
             status=ReviewTaskStatus.OPEN.value,
             reason=result.routing_reason,
             evidence=evidence,

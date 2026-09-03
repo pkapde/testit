@@ -94,6 +94,38 @@ async def validate_claim_documents(
     return validate_claim(claim_id, items)
 
 
+@router.post("/{claim_id}/classification-completeness", response_model=None)
+async def classify_and_check_completeness(
+    claim_id: str,
+    files: list[UploadFile] = File(...),
+    expected_documents: str | None = Form(None),
+):
+    """Run Agent 1 only: file checks, document classification, duplicates, and completeness.
+
+    This is the UI integration endpoint. It deliberately stops before Phase 2
+    extraction and cross-document consistency checks. `expected_documents` is
+    optional and accepts a comma-separated value per file, for example
+    `fir,accident_photos`.
+    """
+    expected_values = [value.strip() for value in expected_documents.split(",")] if expected_documents else []
+    if expected_values and len(expected_values) != len(files):
+        raise HTTPException(422, "expected_documents must have one value per uploaded file")
+    try:
+        expected = [DocumentType(value) for value in expected_values]
+    except ValueError as exc:
+        raise HTTPException(422, f"Unknown expected document type: {exc}") from exc
+
+    items = [
+        IncomingFile(
+            name=file.filename or "unnamed",
+            content=await file.read(),
+            expected=expected[index] if expected else None,
+        )
+        for index, file in enumerate(files)
+    ]
+    return validate_claim(claim_id, items)
+
+
 @router.post("/{claim_id}/triage")
 async def triage_claim_documents(claim_id: str, files: list[UploadFile] = File(...)):
     """Validate, extract basic identifiers, cross-check them, and route to a human stage."""
