@@ -1,4 +1,5 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from app.schemas.claim_storage import ClaimStorageResponse
 from app.schemas.classification import ClassificationCategory, ClassificationResponse
 from app.schemas.documents import DocumentType, ReviewDecisionRequest
 from app.services.document_classifier import UploadedDoc, classify_documents
@@ -165,3 +166,48 @@ async def submit_review_decision(task_id: str, request: ReviewDecisionRequest):
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.post(
+    "/upload-to-storage",
+    response_model=ClaimStorageResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload claim files to Azure Storage and record claim metadata JSON",
+    description=(
+        "Accepts multiple files (pictures and PDFs) and stores them in Azure Storage under a unique "
+        "folder named {claim_id}_{timestamp}. Images/pictures are stored under the vehicle_pics "
+        "subfolder, while PDFs and all other files are stored under other_evidence. "
+        "Upon completion, stores the complete claim information JSON in root folder "
+        "data/Claim_Data/unique_claim_information and returns full metadata."
+    ),
+)
+async def upload_claim_files_to_storage(
+    files: list[UploadFile] = File(..., description="One or more files (pictures, PDFs, documents)"),
+    claim_id: str | None = Form(None, description="Optional unique claim ID. Generated automatically if omitted."),
+    description: str | None = Form(None, description="Optional claim description."),
+    claim_status: str | None = Form("PENDING_VERIFICATION", description="Initial claim status."),
+) -> ClaimStorageResponse:
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one file must be provided for upload.",
+        )
+    file_tuples = []
+    for file in files:
+        content = await file.read()
+        file_tuples.append((file.filename or "unnamed", content, file.content_type))
+
+    try:
+        return store_claim_files_and_metadata(
+            files=file_tuples,
+            claim_id=claim_id,
+            description=description,
+            status=claim_status,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+
