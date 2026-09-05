@@ -86,8 +86,8 @@ def test_classification_endpoint_accident_photos():
     assert "all_4_sides_present" in data["accident_photo_coverage"]
 
 
-def test_classify_with_mocked_gemini_response():
-    mock_gemini_json = {
+def test_classify_with_mocked_azure_openai_response():
+    mock_ai_json = {
         "is_valid": True,
         "category_type": "driving_licence",
         "detected_type": "driving_licence",
@@ -105,12 +105,22 @@ def test_classify_with_mocked_gemini_response():
         "accident_photo_coverage": None,
     }
 
-    mock_settings = type("MockSettings", (), {"gemini_api_key": "mock_key_for_test", "gemini_model": "gemini-2.5-flash"})()
+    mock_settings = type(
+        "MockSettings",
+        (),
+        {
+            "azure_openai_endpoint": "https://demo.openai.azure.com/",
+            "azure_openai_api_key": "mock_key_for_test",
+            "azure_openai_api_key_secret_name": None,
+            "azure_openai_deployment": "gpt-4o",
+            "azure_openai_api_version": "2024-10-21",
+        },
+    )()
     with patch("app.services.document_classifier.settings", mock_settings):
-        with patch("google.genai.Client") as mock_client_cls:
+        with patch("app.services.document_classifier.AzureOpenAI") as mock_client_cls:
             mock_client = mock_client_cls.return_value
-            mock_response = mock_client.models.generate_content.return_value
-            mock_response.text = json.dumps(mock_gemini_json)
+            mock_choice = type("Choice", (), {"message": type("Message", (), {"content": json.dumps(mock_ai_json)})()})()
+            mock_client.chat.completions.create.return_value = type("ChatResponse", (), {"choices": [mock_choice]})()
 
             response = client.post(
                 "/api/v1/claims/classification",

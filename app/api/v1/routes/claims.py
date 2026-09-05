@@ -2,8 +2,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from app.schemas.claim_storage import ClaimStorageResponse
 from app.schemas.classification import ClassificationCategory, ClassificationResponse
 from app.schemas.documents import DocumentType, ReviewDecisionRequest
-from app.services.claim_storage import store_claim_files_and_metadata
-from app.services.document_classifier import UploadedDoc, classify_documents_with_gemini
+from app.services.document_classifier import UploadedDoc, classify_documents
 from app.services.triage import triage_claim
 from app.services.validator import IncomingFile, validate_claim
 from app.services.workflow import run_claim_workflow
@@ -14,9 +13,9 @@ router = APIRouter(prefix="/claims", tags=["claims"])
 @router.post(
     "/classification",
     response_model=ClassificationResponse,
-    summary="Classify document or accident photos using Gemini AI",
+    summary="Classify document or accident photos using Azure OpenAI",
     description=(
-        "Single API to classify uploaded file(s) against a target category_type using Gemini model. "
+        "Single API to classify uploaded file(s) against a target category_type using Azure OpenAI. "
         "Classifies survey_report (survey report motor insurance), repair_invoice, "
         "repair_estimate (repair estimate details), insurance_policy, claim_form, "
         "registration_certificate (RC), driving_licence (driver licence), or accident_photos (car pic four side). "
@@ -63,7 +62,7 @@ async def classify_document(
             )
         )
 
-    response = await classify_documents_with_gemini(
+    response = await classify_documents(
         category_type=norm_category,
         files=uploaded_docs,
     )
