@@ -34,19 +34,40 @@ def configured_model_name() -> str:
     return settings.azure_openai_deployment
 
 
-def create_chat_client():
-    """Create the Azure OpenAI client; never expose credentials to the UI."""
+def _openai_compatible_base_url(endpoint: str) -> str:
+    """Return the Azure OpenAI v1-compatible base URL used by the working client.
 
-    from openai import AzureOpenAI
+    Azure accepts the OpenAI SDK's standard client against its ``/openai/v1/``
+    endpoint.  Keeping this normalisation in one place prevents a deployment
+    endpoint from being accidentally appended twice when configuration already
+    includes the path.
+    """
+    normalized = endpoint.rstrip("/")
+    if normalized.endswith("/openai/v1"):
+        return f"{normalized}/"
+    return f"{normalized}/openai/v1/"
+
+
+def create_chat_client():
+    """Create the working Azure OpenAI v1-compatible client.
+
+    This intentionally follows the previously working integration format:
+    ``OpenAI(base_url=<azure-endpoint>/openai/v1/, api_key=<key>)``.  All
+    agents share this factory so classification, extraction, review, and
+    assessment cannot drift to incompatible SDK URL formats.
+    """
+
+    from openai import OpenAI
     from app.infrastructure.secrets import get_secret
 
     api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
     if not api_key:
         raise RuntimeError("Azure OpenAI API key is not configured")
-    return AzureOpenAI(
-        azure_endpoint=settings.azure_openai_endpoint,
+    if not settings.azure_openai_endpoint:
+        raise RuntimeError("AZURE_OPENAI_ENDPOINT is not configured")
+    return OpenAI(
+        base_url=_openai_compatible_base_url(settings.azure_openai_endpoint),
         api_key=api_key,
-        api_version=settings.azure_openai_api_version,
     )
 
 
