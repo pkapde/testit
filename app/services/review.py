@@ -1,4 +1,4 @@
-"""Human Review #1 task lifecycle and safe workflow resumption."""
+"""Single claims-adjuster review task lifecycle and controlled decisions."""
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -7,7 +7,10 @@ from app.schemas.documents import ClaimTriageResult, ReviewAction, ReviewTaskRes
 
 
 NEXT_CLAIM_STATUS: dict[ReviewAction, str] = {
+    ReviewAction.APPROVE_CLAIM: "APPROVED",
+    ReviewAction.REJECT_CLAIM: "REJECTED",
     ReviewAction.VERIFIED: "READY_FOR_EXTRACTION",
+    ReviewAction.APPROVE_FOR_SETTLEMENT: "READY_FOR_SETTLEMENT_REVIEW",
     ReviewAction.OVERRIDE: "READY_FOR_EXTRACTION",
     ReviewAction.REQUEST_REUPLOAD: "WAITING_FOR_UPLOAD",
     ReviewAction.REJECT_DOCUMENT: "DOCUMENT_REJECTED",
@@ -35,34 +38,51 @@ def _to_response(task: ReviewTaskRecord) -> ReviewTaskResponse:
     )
 
 
-def create_document_review_task(result: ClaimTriageResult) -> ReviewTaskResponse | None:
-    """Persist a Human Review #1 task for document or high-risk fraud routing."""
-    if result.routing_queue.value not in {"DOCUMENT_VERIFICATION", "FRAUD_REVIEW"}:
-        return None
+def create_claims_adjuster_review_task(result: ClaimTriageResult) -> ReviewTaskResponse:
+    """Persist one consolidated task after all automated agents have run."""
     evidence = {
         "validation": result.validation.model_dump(mode="json"),
         "field_validation_issues": [issue.model_dump(mode="json") for issue in result.field_validation_issues],
         "cross_document_issues": [issue.model_dump(mode="json") for issue in result.cross_document_issues],
         "agentic_findings": [finding.model_dump(mode="json") for finding in result.agentic_findings],
+        "fraud_risk_level": result.fraud_risk_level.value,
+        "fraud_findings": [finding.model_dump(mode="json") for finding in result.fraud_findings],
+        "coverage_decision": result.coverage_decision.value if result.coverage_decision else None,
+        "coverage_findings": [finding.model_dump(mode="json") for finding in result.coverage_findings],
+        "assessment": result.assessment.model_dump(mode="json") if result.assessment else None,
+        "settlement_recommendation": result.settlement_recommendation.model_dump(mode="json") if result.settlement_recommendation else None,
     }
     with session_scope() as session:
-        stage = (
-            "HUMAN_REVIEW_1_FRAUD_REVIEW"
-            if result.routing_queue.value == "FRAUD_REVIEW"
-            else "HUMAN_REVIEW_1_DOCUMENT_VERIFICATION"
-        )
+        if hasattr(session, "query"):
+            existing = (
+                session.query(ReviewTaskRecord)
+                .filter_by(claim_id=result.validation.claim_id, status=ReviewTaskStatus.OPEN.value)
+                .order_by(ReviewTaskRecord.created_at.desc())
+                .first()
+            )
+            if existing:
+                return _to_response(existing)
         task = ReviewTaskRecord(
             task_id=str(uuid4()),
             claim_id=result.validation.claim_id,
-            stage=stage,
+            stage="CLAIMS_ADJUSTER_REVIEW",
             status=ReviewTaskStatus.OPEN.value,
             reason=result.routing_reason,
             evidence=evidence,
         )
         session.add(task)
-        session.add(AuditEvent(claim_id=task.claim_id, event_type="DOCUMENT_REVIEW_TASK_CREATED", payload={"task_id": task.task_id, "reason": task.reason}))
+        session.add(AuditEvent(claim_id=task.claim_id, event_type="CLAIMS_ADJUSTER_REVIEW_TASK_CREATED", payload={"task_id": task.task_id, "reason": task.reason, "routing_queue": result.routing_queue.value}))
         session.flush()
         return _to_response(task)
+
+
+def create_document_review_task(result: ClaimTriageResult) -> ReviewTaskResponse:
+    """Compatibility wrapper for existing persistence callers.
+
+    Despite its legacy name, this always creates the single Claims Adjuster
+    review task; there is no separate document-review human role.
+    """
+    return create_claims_adjuster_review_task(result)
 
 
 def list_review_tasks(claim_id: str) -> list[ReviewTaskResponse]:

@@ -23,13 +23,36 @@ EXTRACTION_FIELDS: dict[DocumentType, tuple[str, ...]] = {
 
 
 def is_configured() -> bool:
-    """Return whether a deployment and endpoint are available for AI classification."""
+    """Return whether Azure OpenAI is configured for server-side use."""
     return bool(settings.azure_openai_endpoint and settings.azure_openai_deployment)
+
+
+def configured_model_name() -> str:
+    """Return the configured Azure OpenAI deployment name."""
+    if not settings.azure_openai_deployment:
+        raise RuntimeError("AZURE_OPENAI_DEPLOYMENT is not configured")
+    return settings.azure_openai_deployment
+
+
+def create_chat_client():
+    """Create the Azure OpenAI client; never expose credentials to the UI."""
+
+    from openai import AzureOpenAI
+    from app.infrastructure.secrets import get_secret
+
+    api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
+    if not api_key:
+        raise RuntimeError("Azure OpenAI API key is not configured")
+    return AzureOpenAI(
+        azure_endpoint=settings.azure_openai_endpoint,
+        api_key=api_key,
+        api_version=settings.azure_openai_api_version,
+    )
 
 
 def _log_provider_failure(operation: str, error: Exception) -> None:
     """Log diagnosable provider failures without logging secrets or claim content."""
-    logger.warning("Azure OpenAI %s failed: %s: %s", operation, type(error).__name__, str(error))
+    logger.warning("LLM provider %s failed: %s: %s", operation, type(error).__name__, str(error))
 
 
 def classify_document(*, file_name: str, content: bytes, extracted_text: str) -> tuple[DocumentType, float, list[str]] | None:
@@ -41,17 +64,12 @@ def classify_document(*, file_name: str, content: bytes, extracted_text: str) ->
     if not is_configured():
         return None
 
-    from openai import AzureOpenAI
-    from app.infrastructure.secrets import get_secret
 
-    api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
-    if not api_key:
+    try:
+        client = create_chat_client()
+    except RuntimeError as exc:
+        _log_provider_failure("document classification", exc)
         return None
-    client = AzureOpenAI(
-        azure_endpoint=settings.azure_openai_endpoint,
-        api_key=api_key,
-        api_version=settings.azure_openai_api_version,
-    )
     allowed_types = [document_type.value for document_type in DocumentType]
     prompt = (
         "You classify motor-insurance claim uploads. Return JSON only with keys "
@@ -68,7 +86,7 @@ def classify_document(*, file_name: str, content: bytes, extracted_text: str) ->
         content_part.append({"type": "image_url", "image_url": {"url": data_url, "detail": "low"}})
     try:
         response = client.chat.completions.create(
-            model=settings.azure_openai_deployment,
+            model=configured_model_name(),
             messages=[{"role": "user", "content": content_part}],
             temperature=0,
             response_format={"type": "json_object"},
@@ -99,12 +117,6 @@ def extract_document_fields(*, file_name: str, document_type: DocumentType, extr
     if not allowed_fields:
         return {}
 
-    from openai import AzureOpenAI
-    from app.infrastructure.secrets import get_secret
-
-    api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
-    if not api_key:
-        return None
     prompt = (
         "Extract motor-insurance fields from the supplied OCR/text. Return JSON only with a `fields` object. "
         f"The document is classified as `{document_type.value}` and the only permitted keys are {list(allowed_fields)}. "
@@ -113,13 +125,9 @@ def extract_document_fields(*, file_name: str, document_type: DocumentType, extr
         f"{extracted_text[:12000]}"
     )
     try:
-        client = AzureOpenAI(
-            azure_endpoint=settings.azure_openai_endpoint,
-            api_key=api_key,
-            api_version=settings.azure_openai_api_version,
-        )
+        client = create_chat_client()
         response = client.chat.completions.create(
-            model=settings.azure_openai_deployment,
+            model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             response_format={"type": "json_object"},
@@ -151,12 +159,6 @@ def assess_cross_document_consistency(extracted_fields: dict[str, dict[str, str]
     """
     if not is_configured() or not extracted_fields:
         return None
-    from openai import AzureOpenAI
-    from app.infrastructure.secrets import get_secret
-
-    api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
-    if not api_key:
-        return None
     prompt = (
         "You are a motor-insurance cross-document review assistant. Review only the supplied extracted fields. "
         "Return JSON only: {\"findings\": [{\"field\": string, \"assessment\": \"CONSISTENT\"|\"INCONSISTENT\"|\"NEEDS_REVIEW\", \"confidence\": number 0..1, \"rationale\": string}]}. "
@@ -165,9 +167,9 @@ def assess_cross_document_consistency(extracted_fields: dict[str, dict[str, str]
         f"Extracted fields: {json.dumps(extracted_fields, ensure_ascii=False)}"
     )
     try:
-        client = AzureOpenAI(azure_endpoint=settings.azure_openai_endpoint, api_key=api_key, api_version=settings.azure_openai_api_version)
+        client = create_chat_client()
         response = client.chat.completions.create(
-            model=settings.azure_openai_deployment,
+            model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             response_format={"type": "json_object"},
@@ -208,12 +210,6 @@ def assess_fraud_hypotheses(extracted_fields: dict[str, dict[str, str]], determi
     """
     if not is_configured() or not extracted_fields:
         return None
-    from openai import AzureOpenAI
-    from app.infrastructure.secrets import get_secret
-
-    api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
-    if not api_key:
-        return None
     prompt = (
         "You are an insurance fraud-investigation assistant. Review only the supplied structured extracted fields "
         "and deterministic validation signals. Return JSON only: {\"hypotheses\": [{\"indicator\": string, \"confidence\": number 0..1, \"rationale\": string, \"recommended_review\": string}]}. "
@@ -223,9 +219,9 @@ def assess_fraud_hypotheses(extracted_fields: dict[str, dict[str, str]], determi
         f"Deterministic signals: {json.dumps(deterministic_signals, ensure_ascii=False)}"
     )
     try:
-        client = AzureOpenAI(azure_endpoint=settings.azure_openai_endpoint, api_key=api_key, api_version=settings.azure_openai_api_version)
+        client = create_chat_client()
         response = client.chat.completions.create(
-            model=settings.azure_openai_deployment,
+            model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             response_format={"type": "json_object"},
@@ -249,9 +245,86 @@ def assess_fraud_hypotheses(extracted_fields: dict[str, dict[str, str]], determi
             if indicator and rationale and recommended_review:
                 safe_hypotheses.append({"indicator": indicator, "confidence": confidence, "rationale": rationale, "recommended_review": recommended_review})
         return safe_hypotheses
-    except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        _log_provider_failure("fraud investigation", exc)
-        return None
     except Exception as exc:
         _log_provider_failure("fraud investigation", exc)
+        return None
+
+
+def explain_coverage(*, facts: dict[str, str], clauses: list[dict[str, str]]) -> str | None:
+    """Return an advisory coverage explanation grounded only in retrieved clauses."""
+    if not is_configured() or not clauses:
+        return None
+    prompt = ("You are an insurance coverage assistant. Use only the provided claim facts and clause excerpts. "
+              "Return JSON: {\"explanation\": string}. Explain which cited clause references require human assessment. "
+              "Do not decide approval, rejection, liability, fraud, or payout; do not invent terms. "
+              f"Facts: {json.dumps(facts)} Clauses: {json.dumps(clauses)}")
+    try:
+        client = create_chat_client()
+        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=0, response_format={"type": "json_object"})
+        explanation = str(json.loads(response.choices[0].message.content or "{}").get("explanation", "")).strip()[:2000]
+        return explanation or None
+    except Exception as exc:
+        _log_provider_failure("coverage explanation", exc)
+        return None
+
+
+def answer_policy_enquiry(*, query: str, clauses: list[dict[str, str]]) -> str | None:
+    """Answer a customer policy question using only retrieved approved wording."""
+    if not is_configured() or not clauses:
+        return None
+    prompt = (
+        "You are a motor-insurance policy information assistant. Answer only from the supplied approved policy excerpts. "
+        "Return JSON: {\"answer\": string}. State clearly that this is informational and a Claims Adjuster makes coverage, liability, and payout decisions. "
+        "Do not invent clauses, infer a policyholder's eligibility, or decide a claim. "
+        f"Question: {query} Approved excerpts: {json.dumps(clauses)}"
+    )
+    try:
+        client = create_chat_client()
+        response = client.chat.completions.create(
+            model=configured_model_name(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        answer = str(json.loads(response.choices[0].message.content or "{}").get("answer", "")).strip()[:2000]
+        return answer or None
+    except Exception as exc:
+        _log_provider_failure("policy enquiry", exc)
+        return None
+
+
+def generate_claim_assessment(*, summary: str, evidence: list[str], checklist: list[str]) -> dict[str, object] | None:
+    """Draft a factual review summary and checklist; never a decision or payout."""
+    if not is_configured():
+        return None
+    prompt = ("You draft an insurance claims-officer review brief. Return JSON only: {\"case_summary\": string, \"reviewer_checklist\": [string]}. "
+              "Use only the supplied data. Do not approve/reject a claim, determine fraud, interpret new policy terms, or recommend a payout. "
+              f"Summary: {summary} Evidence: {json.dumps(evidence)} Checklist: {json.dumps(checklist)}")
+    try:
+        client = create_chat_client()
+        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=0, response_format={"type": "json_object"})
+        payload = json.loads(response.choices[0].message.content or "{}")
+        text = str(payload.get("case_summary", "")).strip()[:2000]
+        items = [str(item).strip()[:500] for item in payload.get("reviewer_checklist", []) if str(item).strip()][:10]
+        return {"case_summary": text, "reviewer_checklist": items} if text else None
+    except Exception as exc:
+        _log_provider_failure("claim assessment", exc)
+        return None
+
+
+def explain_settlement_recommendation(*, preliminary_amount: str, basis: list[str]) -> str | None:
+    """Draft a reviewer explanation; it cannot create or change the amount."""
+    if not is_configured():
+        return None
+    prompt = ("You explain a preliminary motor-claim settlement figure to a claims officer. Return JSON: {\"explanation\": string}. "
+              "Use only the fixed amount and listed basis. State that this is not an approval and needs human confirmation. "
+              "Do not change the amount, infer deductibles, approve/reject, or introduce policy terms. "
+              f"Amount: INR {preliminary_amount}. Basis: {json.dumps(basis)}")
+    try:
+        client = create_chat_client()
+        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=0, response_format={"type": "json_object"})
+        text = str(json.loads(response.choices[0].message.content or "{}").get("explanation", "")).strip()[:1500]
+        return text or None
+    except Exception as exc:
+        _log_provider_failure("settlement explanation", exc)
         return None

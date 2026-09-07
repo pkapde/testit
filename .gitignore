@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .env
+policy_reference/
 tmp/
 sample_data/
 Data/

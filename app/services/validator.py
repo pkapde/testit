@@ -63,17 +63,45 @@ def validate_claim(claim_id: str, items: Iterable[IncomingFile], required_docume
             results.append(FileValidationResult(file_name=item.name, expected_document=item.expected, status=FileStatus.NEEDS_REVIEW if review_required else FileStatus.UNREADABLE, message=error, classification_confidence=0.0))
             continue
         detected, confidence, evidence = classify_text(text or "")
+        deterministic_detected, deterministic_confidence = detected, confidence
+        classification_disagreement = False
         extension = Path(item.name).suffix.lower()
-        use_ai_fallback = extension in {".jpg", ".jpeg", ".png"} or detected == DocumentType.UNKNOWN or confidence < settings.classification_review_threshold
+        use_ai_fallback = (
+            settings.llm_always_verify_documents
+            or extension in {".jpg", ".jpeg", ".png"}
+            or detected == DocumentType.UNKNOWN
+            or confidence < settings.classification_review_threshold
+        )
         if use_ai_fallback:
             from app.infrastructure.azure_openai import classify_document, is_configured
             ai_result = classify_document(file_name=item.name, content=item.content, extracted_text=text or "")
             if ai_result:
-                detected, confidence, evidence = ai_result
-                evidence = ["Azure OpenAI fallback classification"] + evidence
+                ai_detected, ai_confidence, ai_evidence = ai_result
+                if (
+                    deterministic_detected != DocumentType.UNKNOWN
+                    and deterministic_confidence >= settings.classification_review_threshold
+                    and ai_detected != DocumentType.UNKNOWN
+                    and ai_detected != deterministic_detected
+                ):
+                    classification_disagreement = True
+                    evidence = [
+                        "Deterministic and Azure OpenAI classification disagree; Claims Adjuster review required",
+                        *evidence,
+                        *ai_evidence,
+                    ]
+                else:
+                    detected, confidence = ai_detected, ai_confidence
+                    llm_label = (
+                        "Azure OpenAI fallback classification"
+                        if deterministic_detected == DocumentType.UNKNOWN
+                        else "Azure OpenAI classification verification"
+                    )
+                    evidence = [llm_label] + ai_evidence
             elif detected == DocumentType.UNKNOWN and is_configured():
                 evidence = ["Azure OpenAI classification did not return a usable result"]
-        if detected == DocumentType.UNKNOWN or confidence < settings.classification_review_threshold:
+        if classification_disagreement:
+            status, message = FileStatus.NEEDS_REVIEW, "Deterministic and Azure OpenAI classifications disagree; manual review required"
+        elif detected == DocumentType.UNKNOWN or confidence < settings.classification_review_threshold:
             status, message = FileStatus.NEEDS_REVIEW, "Document type is ambiguous; manual review required"
         elif item.expected and detected != item.expected:
             status, message = FileStatus.WRONG_DOCUMENT, f"Expected {item.expected.value}, but content indicates {detected.value}"

@@ -123,5 +123,5 @@ def test_upload_fails_gracefully_when_azure_not_configured():
             files=[("files", ("car.png", b"test content", "image/png"))],
         )
 
-    assert response.status_code == 500
+    assert response.status_code == 503
     assert "Azure Storage is not configured" in response.json()["detail"]

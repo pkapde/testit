@@ -57,7 +57,10 @@ class ReviewTaskStatus(str, Enum):
 
 
 class ReviewAction(str, Enum):
+    APPROVE_CLAIM = "APPROVE_CLAIM"
+    REJECT_CLAIM = "REJECT_CLAIM"
     VERIFIED = "VERIFIED"
+    APPROVE_FOR_SETTLEMENT = "APPROVE_FOR_SETTLEMENT"
     REQUEST_REUPLOAD = "REQUEST_REUPLOAD"
     REJECT_DOCUMENT = "REJECT_DOCUMENT"
     ESCALATE_FRAUD = "ESCALATE_FRAUD"
@@ -117,6 +120,35 @@ class FraudFinding(BaseModel):
     evidence: dict[str, str] = Field(default_factory=dict)
 
 
+class CoverageDecision(str, Enum):
+    ELIGIBLE_FOR_REVIEW = "ELIGIBLE_FOR_REVIEW"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    NOT_COVERED = "NOT_COVERED"
+
+
+class CoverageFinding(BaseModel):
+    rule_id: str
+    outcome: str
+    message: str
+    evidence: dict[str, str] = Field(default_factory=dict)
+
+
+class ClaimAssessment(BaseModel):
+    case_summary: str
+    evidence_summary: list[str] = Field(default_factory=list)
+    reviewer_checklist: list[str] = Field(default_factory=list)
+    generation_method: str = "DETERMINISTIC"
+
+
+class SettlementRecommendation(BaseModel):
+    status: str
+    preliminary_amount: str | None = None
+    currency: str = "INR"
+    basis: list[str] = Field(default_factory=list)
+    explanation: str | None = None
+    generation_method: str = "DETERMINISTIC"
+
+
 class ClaimTriageResult(BaseModel):
     validation: ClaimValidationResult
     extracted_fields: dict[str, dict[str, str]]
@@ -126,5 +158,10 @@ class ClaimTriageResult(BaseModel):
     agentic_findings: list[AgenticFinding] = Field(default_factory=list)
     fraud_risk_level: FraudRiskLevel = FraudRiskLevel.LOW
     fraud_findings: list[FraudFinding] = Field(default_factory=list)
+    coverage_decision: CoverageDecision | None = None
+    coverage_findings: list[CoverageFinding] = Field(default_factory=list)
+    coverage_explanation: str | None = None
+    assessment: ClaimAssessment | None = None
+    settlement_recommendation: SettlementRecommendation | None = None
     routing_queue: TriageQueue
     routing_reason: str

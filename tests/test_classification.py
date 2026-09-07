@@ -105,31 +105,21 @@ def test_classify_with_mocked_azure_openai_response():
         "accident_photo_coverage": None,
     }
 
-    mock_settings = type(
-        "MockSettings",
-        (),
-        {
-            "azure_openai_endpoint": "https://demo.openai.azure.com/",
-            "azure_openai_api_key": "mock_key_for_test",
-            "azure_openai_api_key_secret_name": None,
-            "azure_openai_deployment": "gpt-4o",
-            "azure_openai_api_version": "2024-10-21",
-        },
-    )()
-    with patch("app.services.document_classifier.settings", mock_settings):
-        with patch("app.services.document_classifier.AzureOpenAI") as mock_client_cls:
-            mock_client = mock_client_cls.return_value
-            mock_choice = type("Choice", (), {"message": type("Message", (), {"content": json.dumps(mock_ai_json)})()})()
-            mock_client.chat.completions.create.return_value = type("ChatResponse", (), {"choices": [mock_choice]})()
+    with patch("app.services.document_classifier.is_configured", return_value=True):
+        with patch("app.services.document_classifier.create_chat_client") as mock_client_factory:
+            mock_client = mock_client_factory.return_value
+            with patch("app.services.document_classifier.configured_model_name", return_value="gpt-4o"):
+                mock_choice = type("Choice", (), {"message": type("Message", (), {"content": json.dumps(mock_ai_json)})()})()
+                mock_client.chat.completions.create.return_value = type("ChatResponse", (), {"choices": [mock_choice]})()
 
-            response = client.post(
-                "/api/v1/claims/classification",
-                data={"category_type": "driving_licence"},
-                files=[("files", ("dl.png", b"\x89PNGfakeimagebytes", "image/png"))],
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert data["is_valid"] is True
-            assert data["detected_type"] == "driving_licence"
-            assert data["confidence"] == 0.96
-            assert data["error"] is None
+                response = client.post(
+                    "/api/v1/claims/classification",
+                    data={"category_type": "driving_licence"},
+                    files=[("files", ("dl.png", b"\x89PNGfakeimagebytes", "image/png"))],
+                )
+                assert response.status_code == 200
+                data = response.json()
+                assert data["is_valid"] is True
+                assert data["detected_type"] == "driving_licence"
+                assert data["confidence"] == 0.96
+                assert data["error"] is None

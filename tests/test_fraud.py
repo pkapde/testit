@@ -45,12 +45,7 @@ def test_workflow_runs_fraud_agent_before_final_human_routing():
     ]
     result = run_claim_workflow("CLM-FRAUD-2", files)
     assert result["triage"].fraud_risk_level in {"LOW", "MEDIUM", "HIGH"}
-    assert result["human_stage"] in {
-        "HUMAN_REVIEW_1_DOCUMENT_VERIFICATION",
-        "HUMAN_REVIEW_1_FRAUD_REVIEW",
-        "HUMAN_REVIEW_2_CLAIMS_OFFICER",
-        "READY_FOR_EXTRACTION",
-    }
+    assert result["human_stage"] == "CLAIMS_ADJUSTER_REVIEW"
 
 
 def test_llm_fraud_hypothesis_is_always_advisory(monkeypatch):

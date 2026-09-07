@@ -13,8 +13,12 @@ class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     classification_review_threshold: float = float(os.getenv("CLASSIFICATION_REVIEW_THRESHOLD", "0.70"))
+    # When Azure OpenAI is configured, independently verify every document
+    # classification. A disagreement never auto-accepts a document.
+    llm_always_verify_documents: bool = os.getenv("LLM_ALWAYS_VERIFY_DOCUMENTS", "true").lower() == "true"
     estimate_invoice_variance_threshold: float = float(os.getenv("ESTIMATE_INVOICE_VARIANCE_THRESHOLD", "0.20"))
     max_upload_size_bytes: int = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", "10485760"))
+    policy_reference_path: str | None = os.getenv("POLICY_REFERENCE_PATH")
     # Comma-separated browser origins permitted to call the API. Keep this
     # explicit in production instead of using a wildcard with credentials.
     cors_origins: tuple[str, ...] = tuple(

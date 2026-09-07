@@ -5,11 +5,10 @@ import logging
 import mimetypes
 from typing import NamedTuple
 
-from openai import AzureOpenAI
 from pypdf import PdfReader
 
 from app.core.config import settings
-from app.infrastructure.secrets import get_secret
+from app.infrastructure.azure_openai import configured_model_name, create_chat_client, is_configured
 from app.schemas.classification import (
     AccidentPhotoCoverage,
     ClassificationCategory,
@@ -110,7 +109,7 @@ def _mock_classification_fallback(
                 filename=f.filename,
                 status="VALID" if is_valid else "INVALID",
                 detected_content=f"Detected content for {f.filename}",
-                notes="Analyzed via offline heuristic fallback (Azure OpenAI not configured)",
+                notes="Analyzed via deterministic fallback because no vision-capable LLM was available",
             )
         )
 
@@ -174,17 +173,12 @@ async def classify_documents(
             error="No files uploaded. Please upload at least one file.",
         )
 
-    api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
-    if not (settings.azure_openai_endpoint and api_key and settings.azure_openai_deployment):
-        logger.warning("Azure OpenAI is not configured. Falling back to offline evaluation.")
+    if not is_configured():
+        logger.warning("LLM provider is not configured. Falling back to offline evaluation.")
         return _mock_classification_fallback(target_category, files)
 
     try:
-        client = AzureOpenAI(
-            azure_endpoint=settings.azure_openai_endpoint,
-            api_key=api_key,
-            api_version=settings.azure_openai_api_version,
-        )
+        client = create_chat_client()
 
         prompt = f"""
 You are an expert document and vehicle damage classifier for a motor insurance system.
@@ -271,7 +265,7 @@ Note: `accident_photo_coverage` should be included if requested category is `acc
                     })
 
         response = client.chat.completions.create(
-            model=settings.azure_openai_deployment,
+            model=configured_model_name(),
             messages=[{"role": "user", "content": content_parts}],
             temperature=0.1,
             response_format={"type": "json_object"},

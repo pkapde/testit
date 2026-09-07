@@ -62,7 +62,7 @@ tests/                isolated service tests
 
 ## Orchestration and observability
 
-The triage route runs through LangGraph: `validate -> triage -> document verification | claims officer | ready for extraction`. LangSmith tracing is disabled by default. Set `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` to emit a sanitized run trace; document bytes and extracted PII are never sent to the trace.
+The triage route runs through LangGraph: `validate -> triage -> fraud -> coverage -> assessment -> settlement recommendation -> claims adjuster review`. Every outcome converges on the same authorised Claims Adjuster; `DOCUMENT_VERIFICATION`, `FRAUD_REVIEW`, and `CLAIMS_OFFICER` remain evidence/routing categories, not separate human roles. LangSmith tracing is disabled by default. Set `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` to emit a sanitized run trace; document bytes and extracted PII are never sent to the trace.
 
 ## Phase 2 extraction and cross-document triage
 
@@ -81,14 +81,14 @@ It also requires core fields from the mandatory claim form, RC, policy, driving 
 
 When Azure OpenAI is configured, the Cross-Document Validation Agent also makes a schema-constrained semantic review call using extracted fields only (not raw document bytes). It can flag abbreviated-name, claimant/owner, or accident-narrative ambiguities in `agentic_findings`. `INCONSISTENT` and `NEEDS_REVIEW` findings route to `CLAIMS_OFFICER`; the model cannot approve, reject, or override deterministic identifier/date/amount checks.
 
-## Human Review #1 lifecycle
+## Single Claims Adjuster review lifecycle
 
-The durable production route (`POST /api/v1/claims/{claim_id}/ingest`) creates a PostgreSQL `review_tasks` record when triage routes a package to `DOCUMENT_VERIFICATION`. Review tasks include the reason, validation evidence, reviewer decision, timestamp, and audit events.
+The durable production route (`POST /api/v1/claims/{claim_id}/ingest`) creates one PostgreSQL `review_tasks` record after the automated workflow completes. The Claims Adjuster receives the routing reason, validation evidence, fraud and coverage findings, assessment, settlement recommendation, decision, timestamp, and audit events.
 
 - `GET /api/v1/claims/{claim_id}/reviews` lists tasks for a claim.
-- `POST /api/v1/claims/reviews/{task_id}/decision` records `VERIFIED`, `REQUEST_REUPLOAD`, `REJECT_DOCUMENT`, `ESCALATE_FRAUD`, or `OVERRIDE`.
+- `POST /api/v1/claims/reviews/{task_id}/decision` records `APPROVE_CLAIM`, `REJECT_CLAIM`, `REQUEST_REUPLOAD`, `REJECT_DOCUMENT`, `ESCALATE_FRAUD`, or `OVERRIDE`.
 
-The decision changes the persisted claim state to `READY_FOR_EXTRACTION`, `WAITING_FOR_UPLOAD`, `DOCUMENT_REJECTED`, or `FRAUD_REVIEW`. In production, authentication must supply the reviewer identity; the current local API accepts `reviewer_id` only to exercise the workflow.
+The decision changes the persisted claim state to `APPROVED`, `REJECTED`, `WAITING_FOR_UPLOAD`, `DOCUMENT_REJECTED`, or `FRAUD_REVIEW`. In production, authentication must supply the reviewer identity; the current local API accepts `reviewer_id` only to exercise the workflow.
 
 ## Production secrets and identity
 

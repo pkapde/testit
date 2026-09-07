@@ -2,10 +2,12 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from app.schemas.claim_storage import ClaimStorageResponse
 from app.schemas.classification import ClassificationCategory, ClassificationResponse
 from app.schemas.documents import DocumentType, ReviewDecisionRequest
+from app.services.claim_storage import store_claim_files_and_metadata
 from app.services.document_classifier import UploadedDoc, classify_documents
 from app.services.triage import triage_claim
 from app.services.validator import IncomingFile, validate_claim
 from app.services.workflow import run_claim_workflow
+from app.core.config import settings
 
 router = APIRouter(prefix="/claims", tags=["claims"])
 
@@ -129,9 +131,13 @@ async def classify_and_check_completeness(
 
 @router.post("/{claim_id}/triage")
 async def triage_claim_documents(claim_id: str, files: list[UploadFile] = File(...)):
-    """Validate, extract basic identifiers, cross-check them, and route to a human stage."""
+    """Run the workflow and persist a Claims Adjuster task when PostgreSQL is configured."""
     items = [IncomingFile(name=file.filename or "unnamed", content=await file.read()) for file in files]
     workflow = run_claim_workflow(claim_id, items)
+    if settings.database_url:
+        from app.services.persistence import persist_triage_result
+
+        persist_triage_result(workflow["triage"], items)
     return workflow["triage"]
 
 
@@ -151,14 +157,14 @@ async def ingest_claim_documents(claim_id: str, files: list[UploadFile] = File(.
 
 @router.get("/{claim_id}/reviews")
 async def get_claim_review_tasks(claim_id: str):
-    """List durable document-review tasks for a claim."""
+    """List durable Claims Adjuster review tasks for a claim."""
     from app.services.review import list_review_tasks
     return list_review_tasks(claim_id)
 
 
 @router.post("/reviews/{task_id}/decision")
 async def submit_review_decision(task_id: str, request: ReviewDecisionRequest):
-    """Resolve Human Review #1 and move the claim to its controlled next stage."""
+    """Resolve the single Claims Adjuster review and record its controlled outcome."""
     from app.services.review import resolve_review_task
     try:
         return resolve_review_task(task_id, request.action, request.reviewer_id, request.comment)
@@ -206,7 +212,7 @@ async def upload_claim_files_to_storage(
         )
     except RuntimeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
 

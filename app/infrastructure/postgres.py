@@ -43,7 +43,7 @@ class AuditEvent(Base):
 
 
 class ReviewTaskRecord(Base):
-    """Durable Human Review #1 task. The source document remains in Blob Storage."""
+    """Durable Claims Adjuster review task. The source document remains in Blob Storage."""
     __tablename__ = "review_tasks"
     task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)

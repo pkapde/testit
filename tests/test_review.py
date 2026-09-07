@@ -3,6 +3,8 @@ from app.services.review import next_claim_status
 
 
 def test_review_actions_have_a_controlled_next_stage():
+    assert next_claim_status(ReviewAction.APPROVE_CLAIM) == "APPROVED"
+    assert next_claim_status(ReviewAction.REJECT_CLAIM) == "REJECTED"
     assert next_claim_status(ReviewAction.VERIFIED) == "READY_FOR_EXTRACTION"
     assert next_claim_status(ReviewAction.OVERRIDE) == "READY_FOR_EXTRACTION"
     assert next_claim_status(ReviewAction.REQUEST_REUPLOAD) == "WAITING_FOR_UPLOAD"

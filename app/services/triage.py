@@ -279,6 +279,10 @@ def build_triage_result(validation, items: list[IncomingFile]) -> ClaimTriageRes
 
 
 def triage_claim(claim_id: str, items: list[IncomingFile]) -> ClaimTriageResult:
+    from app.services.assessment import apply_claim_assessment
+    from app.services.coverage import apply_coverage_assessment
     from app.services.fraud import apply_fraud_assessment
+    from app.services.settlement import apply_settlement_recommendation
 
-    return apply_fraud_assessment(build_triage_result(validate_claim(claim_id, items), items))
+    fraud_assessed = apply_fraud_assessment(build_triage_result(validate_claim(claim_id, items), items))
+    return apply_settlement_recommendation(apply_claim_assessment(apply_coverage_assessment(fraud_assessed)))

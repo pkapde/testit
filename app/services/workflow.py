@@ -33,31 +33,35 @@ def detect_fraud(state: ClaimWorkflowState) -> ClaimWorkflowState:
     return {"triage": result, "trace_id": trace_triage(result)}
 
 
-def route_human_stage(state: ClaimWorkflowState) -> Literal["document_verification", "claims_officer", "ready_for_extraction"]:
-    queue = state["triage"].routing_queue
-    if queue == TriageQueue.DOCUMENT_VERIFICATION:
-        return "document_verification"
-    if queue == TriageQueue.FRAUD_REVIEW:
-        return "fraud_review"
-    if queue == TriageQueue.CLAIMS_OFFICER:
-        return "claims_officer"
-    return "ready_for_extraction"
+def assess_coverage(state: ClaimWorkflowState) -> ClaimWorkflowState:
+    """Phase 4 baseline policy coverage and rule-engine agent."""
+    from app.services.coverage import apply_coverage_assessment
+
+    return {"triage": apply_coverage_assessment(state["triage"])}
 
 
-def document_verification(_: ClaimWorkflowState) -> ClaimWorkflowState:
-    return {"human_stage": "HUMAN_REVIEW_1_DOCUMENT_VERIFICATION"}
+def prepare_claim_assessment(state: ClaimWorkflowState) -> ClaimWorkflowState:
+    from app.services.assessment import apply_claim_assessment
+    return {"triage": apply_claim_assessment(state["triage"])}
 
 
-def claims_officer(_: ClaimWorkflowState) -> ClaimWorkflowState:
-    return {"human_stage": "HUMAN_REVIEW_2_CLAIMS_OFFICER"}
+def prepare_settlement_recommendation(state: ClaimWorkflowState) -> ClaimWorkflowState:
+    from app.services.settlement import apply_settlement_recommendation
+    return {"triage": apply_settlement_recommendation(state["triage"])}
 
 
-def fraud_review(_: ClaimWorkflowState) -> ClaimWorkflowState:
-    return {"human_stage": "HUMAN_REVIEW_1_FRAUD_REVIEW"}
+def route_human_stage(_: ClaimWorkflowState) -> Literal["claims_adjuster_review"]:
+    """All automated paths converge on the one authorised human reviewer.
+
+    `routing_queue` remains in the triage result as an evidence category (for
+    example document quality, fraud risk, or coverage). It is not a separate
+    human role or a second approval step.
+    """
+    return "claims_adjuster_review"
 
 
-def ready_for_extraction(_: ClaimWorkflowState) -> ClaimWorkflowState:
-    return {"human_stage": "READY_FOR_EXTRACTION"}
+def claims_adjuster_review(_: ClaimWorkflowState) -> ClaimWorkflowState:
+    return {"human_stage": "CLAIMS_ADJUSTER_REVIEW"}
 
 
 def create_claim_workflow():
@@ -65,18 +69,18 @@ def create_claim_workflow():
     graph.add_node("validate", validate_documents)
     graph.add_node("triage", triage_documents)
     graph.add_node("fraud_detection", detect_fraud)
-    graph.add_node("document_verification", document_verification)
-    graph.add_node("claims_officer", claims_officer)
-    graph.add_node("fraud_review", fraud_review)
-    graph.add_node("ready_for_extraction", ready_for_extraction)
+    graph.add_node("coverage_assessment", assess_coverage)
+    graph.add_node("claim_assessment", prepare_claim_assessment)
+    graph.add_node("settlement_recommendation", prepare_settlement_recommendation)
+    graph.add_node("claims_adjuster_review", claims_adjuster_review)
     graph.add_edge(START, "validate")
     graph.add_edge("validate", "triage")
     graph.add_edge("triage", "fraud_detection")
-    graph.add_conditional_edges("fraud_detection", route_human_stage)
-    graph.add_edge("document_verification", END)
-    graph.add_edge("claims_officer", END)
-    graph.add_edge("fraud_review", END)
-    graph.add_edge("ready_for_extraction", END)
+    graph.add_edge("fraud_detection", "coverage_assessment")
+    graph.add_edge("coverage_assessment", "claim_assessment")
+    graph.add_edge("claim_assessment", "settlement_recommendation")
+    graph.add_conditional_edges("settlement_recommendation", route_human_stage)
+    graph.add_edge("claims_adjuster_review", END)
     return graph.compile()
 
 
