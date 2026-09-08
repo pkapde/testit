@@ -125,3 +125,124 @@ def test_upload_fails_gracefully_when_azure_not_configured():
 
     assert response.status_code == 500
     assert "Azure Storage is not configured" in response.json()["detail"]
+
+
+def test_upload_claim_persists_all_columns_to_postgres_db():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.infrastructure.postgres import Base, ClaimStorageRecord
+
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(test_engine)
+    TestSession = sessionmaker(bind=test_engine, expire_on_commit=False)
+
+    mock_service, mock_container, mock_blob = _setup_mock_azure()
+
+    test_files = [
+        ("files", ("car_front.jpg", b"image bytes 1", "image/jpeg")),
+        ("files", ("repair_estimate.pdf", b"pdf bytes 1", "application/pdf")),
+    ]
+
+    detailed_report_payload = {
+        "inspector": "Jane Surveyor",
+        "estimated_damage_cost": 3400.50,
+        "parts_recommended": ["front_bumper", "headlight_assembly"],
+        "severity": "MODERATE",
+    }
+
+    with patch("app.services.claim_storage._get_azure_blob_service", return_value=mock_service), \
+         patch("app.infrastructure.postgres._session_factory", return_value=TestSession):
+
+        # Initial upload does NOT send detailed_report
+        response = client.post(
+            "/api/v1/claims/upload-to-storage",
+            data={
+                "claim_id": "CLM-PG-777",
+                "user_name": "Rishabh",
+                "description": "Front collision on highway with damage report",
+                "claim_status": "UNDER_ASSESSMENT",
+            },
+            files=test_files,
+        )
+
+    assert response.status_code == 201
+    data = response.json()
+    # Untouched older response format
+    assert data["claim_id"] == "CLM-PG-777"
+    assert data["status"] == "UNDER_ASSESSMENT"
+    assert data["total_files_uploaded"] == 2
+    assert Path(data["saved_metadata_path"]).exists()
+
+    # 1. Verify directly in the separate PostgreSQL database table (claim_storage_records)
+    with TestSession() as session:
+        claim_row = session.get(ClaimStorageRecord, "CLM-PG-777")
+        assert claim_row is not None
+        # Verify columns in PostgreSQL table
+        assert claim_row.claim_id == "CLM-PG-777"
+        assert claim_row.user_name == "Rishabh"
+        assert claim_row.status == "UNDER_ASSESSMENT"
+        assert "CLM-PG-777_" in claim_row.vehicle_pic_folder
+        assert claim_row.vehicle_pic_folder.endswith("/vehicle_pics")
+        assert "CLM-PG-777_" in claim_row.other_document_folder_details
+        assert claim_row.other_document_folder_details.endswith("/other_evidence")
+        assert claim_row.description == "Front collision on highway with damage report"
+        assert claim_row.detailed_report is None
+        assert isinstance(claim_row.claim_folder_json, dict)
+        assert claim_row.claim_folder_json["claim_id"] == "CLM-PG-777"
+        assert claim_row.claim_folder_json["vehicle_pics_count"] == 1
+        assert claim_row.claim_folder_json["other_evidence_count"] == 1
+        assert claim_row.created_at is not None
+
+    # 2. Test GET /api/v1/claims to fetch all claims and their details JSON from PostgreSQL
+    with patch("app.infrastructure.postgres._session_factory", return_value=TestSession):
+        get_all_res = client.get("/api/v1/claims")
+        assert get_all_res.status_code == 200
+        all_claims = get_all_res.json()
+        assert len(all_claims) >= 1
+        # Find our claim in the list
+        matched = next((c for c in all_claims if c.get("claim_id") == "CLM-PG-777"), None)
+        assert matched is not None
+        assert matched["claim_id"] == "CLM-PG-777"
+        assert matched["status"] == "UNDER_ASSESSMENT"
+        assert matched["user_name"] == "Rishabh"
+        assert matched["storage_details"]["backend"] == "azure_blob_storage"
+        assert matched["vehicle_pics_count"] == 1
+        assert matched["other_evidence_count"] == 1
+
+    # 3. Test GET /api/v1/claims/{claim_id}/details
+    with patch("app.infrastructure.postgres._session_factory", return_value=TestSession):
+        get_single_res = client.get("/api/v1/claims/CLM-PG-777/details")
+        assert get_single_res.status_code == 200
+        single_claim = get_single_res.json()
+        assert single_claim["claim_id"] == "CLM-PG-777"
+        assert single_claim["status"] == "UNDER_ASSESSMENT"
+        assert single_claim["user_name"] == "Rishabh"
+        assert single_claim["storage_details"]["base_folder"].startswith("CLM-PG-777_")
+        assert len(single_claim["vehicle_pics"]) == 1
+        assert len(single_claim["other_evidence"]) == 1
+
+
+def test_get_claim_details_404_when_not_found():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.infrastructure.postgres import Base
+
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(test_engine)
+    TestSession = sessionmaker(bind=test_engine, expire_on_commit=False)
+
+    with patch("app.infrastructure.postgres._session_factory", return_value=TestSession):
+        res = client.get("/api/v1/claims/CLM-NON-EXISTENT-XYZ/details")
+        assert res.status_code == 404
+        assert "not found" in res.json()["detail"]
+

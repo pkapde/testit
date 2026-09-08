@@ -3,6 +3,11 @@ from app.schemas.claim_storage import ClaimStorageResponse
 from app.schemas.classification import ClassificationCategory, ClassificationResponse
 from app.schemas.documents import DocumentType, ReviewDecisionRequest
 from app.services.document_classifier import UploadedDoc, classify_documents
+from app.services.claim_storage import (
+    get_all_claims_json_from_postgres,
+    get_claim_details_json_from_postgres,
+    store_claim_files_and_metadata,
+)
 from app.services.triage import triage_claim
 from app.services.validator import IncomingFile, validate_claim
 from app.services.workflow import run_claim_workflow
@@ -184,6 +189,7 @@ async def submit_review_decision(task_id: str, request: ReviewDecisionRequest):
 async def upload_claim_files_to_storage(
     files: list[UploadFile] = File(..., description="One or more files (pictures, PDFs, documents)"),
     claim_id: str | None = Form(None, description="Optional unique claim ID. Generated automatically if omitted."),
+    user_name: str | None = Form(None, description="Optional user or claimant name associated with the claim."),
     description: str | None = Form(None, description="Optional claim description."),
     claim_status: str | None = Form("PENDING_VERIFICATION", description="Initial claim status."),
 ) -> ClaimStorageResponse:
@@ -201,6 +207,7 @@ async def upload_claim_files_to_storage(
         return store_claim_files_and_metadata(
             files=file_tuples,
             claim_id=claim_id,
+            user_name=user_name,
             description=description,
             status=claim_status,
         )
@@ -209,5 +216,39 @@ async def upload_claim_files_to_storage(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc),
         ) from exc
+
+
+@router.get(
+    "",
+    response_model=list[dict],
+    summary="Get all claims and their details JSON from PostgreSQL",
+    description=(
+        "Retrieves all claims and the details JSON stored under the claim_folder_json column "
+        "from the Azure PostgreSQL claim_storage_records table."
+    ),
+)
+@router.get(
+    "/all",
+    response_model=list[dict],
+    include_in_schema=False,
+)
+def get_all_claims() -> list[dict]:
+    return get_all_claims_json_from_postgres()
+
+
+@router.get(
+    "/{claim_id}/details",
+    response_model=dict,
+    summary="Get claim details JSON by claim_id from PostgreSQL",
+    description="Retrieves the claim details JSON stored under the claim_folder_json column from Azure PostgreSQL.",
+)
+def get_claim_details(claim_id: str) -> dict:
+    details = get_claim_details_json_from_postgres(claim_id)
+    if not details:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Claim details for {claim_id} not found in database.",
+        )
+    return details
 
 
