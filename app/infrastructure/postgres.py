@@ -20,6 +20,21 @@ class ClaimRecord(Base):
     documents: Mapped[list["DocumentRecord"]] = relationship(back_populates="claim", cascade="all, delete-orphan")
 
 
+class ClaimStorageRecord(Base):
+    """Separate dedicated table for Azure Blob Storage upload metadata and details."""
+    __tablename__ = "claim_storage_records"
+    claim_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING_VERIFICATION")
+    vehicle_pic_folder: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    other_document_folder_details: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    detailed_report: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    claim_folder_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class DocumentRecord(Base):
     __tablename__ = "claim_documents"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -72,7 +87,7 @@ logger = logging.getLogger(__name__)
 
 
 def initialize_database() -> None:
-    """Create tables for a local proof-of-concept. Use Alembic migrations in deployment."""
+    """Create tables for local proof-of-concept and Azure PostgreSQL."""
     if not settings.database_url:
         return
     try:

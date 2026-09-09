@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 import re
+from typing import Any
 from uuid import uuid4
 
 from app.core.config import settings
@@ -39,16 +40,150 @@ def _get_azure_blob_service():
     return None
 
 
+def save_claim_storage_to_postgres(
+    claim_id: str,
+    user_name: str | None,
+    status: str,
+    vehicle_pic_folder: str,
+    other_document_folder_details: str,
+    description: str,
+    detailed_report: dict | list | None,
+    claim_folder_json: dict,
+) -> bool:
+    """
+    Persist claim metadata into separate Azure PostgreSQL table (claim_storage_records).
+    Populates:
+      - claim_id
+      - user_name
+      - status
+      - vehicle_pic_folder
+      - other_document_folder_details
+      - description
+      - detailed_report (JSON)
+      - claim_folder_json (all details under claim folder json in one column as JSON)
+    """
+    try:
+        from app.infrastructure.postgres import ClaimStorageRecord, session_scope
+        with session_scope() as session:
+            record = session.get(ClaimStorageRecord, claim_id)
+            if not record:
+                record = ClaimStorageRecord(claim_id=claim_id)
+                session.add(record)
+
+            record.user_name = user_name
+            record.status = status
+            record.vehicle_pic_folder = vehicle_pic_folder
+            record.other_document_folder_details = other_document_folder_details
+            record.description = description
+            record.detailed_report = detailed_report
+            record.claim_folder_json = claim_folder_json
+
+        logger.info(f"Successfully saved claim storage record {claim_id} to claim_storage_records table.")
+        return True
+    except Exception as exc:
+        logger.warning(f"Could not persist claim storage record {claim_id} to PostgreSQL: {exc}")
+        return False
+
+
+def get_all_claims_json_from_postgres() -> list[dict]:
+    """
+    Retrieve all claims and their details JSON from Azure PostgreSQL claim_storage_records table.
+    Returns the JSON stored under the claim_folder_json column (the exact details JSON returned after saving files to storage).
+    """
+    results: list[dict] = []
+    try:
+        from sqlalchemy import select
+        from app.infrastructure.postgres import ClaimStorageRecord, session_scope
+        with session_scope() as session:
+            stmt = select(ClaimStorageRecord).order_by(ClaimStorageRecord.created_at.desc())
+            records = session.scalars(stmt).all()
+            for r in records:
+                if r.claim_folder_json:
+                    claim_json = dict(r.claim_folder_json)
+                    if r.user_name and "user_name" not in claim_json:
+                        claim_json["user_name"] = r.user_name
+                    results.append(claim_json)
+                else:
+                    results.append({
+                        "claim_id": r.claim_id,
+                        "user_name": r.user_name,
+                        "status": r.status,
+                        "description": r.description,
+                        "vehicle_pics_folder": r.vehicle_pic_folder,
+                        "other_document_folder_details": r.other_document_folder_details,
+                        "detailed_report": r.detailed_report,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    })
+    except Exception as exc:
+        logger.warning(f"Failed to query all claim records from PostgreSQL: {exc}")
+
+    if not results:
+        # Fallback to local files if database is empty or not configured
+        project_root = Path(__file__).resolve().parents[2]
+        metadata_dir = project_root / "Data" / "Claim_Data" / "unique_claim_information"
+        if metadata_dir.exists():
+            for json_file in sorted(metadata_dir.glob("CLM-*_*.json"), reverse=True):
+                try:
+                    results.append(json.loads(json_file.read_text(encoding="utf-8")))
+                except Exception:
+                    pass
+
+    return results
+
+
+def get_claim_details_json_from_postgres(claim_id: str) -> dict | None:
+    """Retrieve details JSON for a single claim from Azure PostgreSQL claim_folder_json column."""
+    try:
+        from app.infrastructure.postgres import ClaimStorageRecord, session_scope
+        with session_scope() as session:
+            record = session.get(ClaimStorageRecord, claim_id.strip().upper())
+            if record and record.claim_folder_json:
+                data = dict(record.claim_folder_json)
+                if record.user_name and "user_name" not in data:
+                    data["user_name"] = record.user_name
+                return data
+    except Exception as exc:
+        logger.warning(f"Failed to query claim {claim_id} from PostgreSQL: {exc}")
+
+    # Fallback to local file if available
+    project_root = Path(__file__).resolve().parents[2]
+    metadata_dir = project_root / "Data" / "Claim_Data" / "unique_claim_information"
+    latest_file = metadata_dir / f"{claim_id.strip().upper()}.json"
+    if latest_file.exists():
+        try:
+            return json.loads(latest_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return None
+
+
+def update_claim_detailed_report(claim_id: str, detailed_report: Any) -> bool:
+    """Save or update detailed_report for a claim at a later stage in claim_storage_records."""
+    try:
+        from app.infrastructure.postgres import ClaimStorageRecord, session_scope
+        with session_scope() as session:
+            record = session.get(ClaimStorageRecord, claim_id.strip().upper())
+            if not record:
+                return False
+            record.detailed_report = detailed_report
+        logger.info(f"Updated detailed_report for claim {claim_id} in claim_storage_records table.")
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to update detailed_report for claim {claim_id}: {exc}")
+        return False
+
+
 def store_claim_files_and_metadata(
     files: list[tuple[str, bytes, str | None]],
     claim_id: str | None = None,
+    user_name: str | None = None,
     description: str | None = None,
     status: str | None = None,
 ) -> ClaimStorageResponse:
     """
     Store uploaded files in Azure Storage categorized by vehicle_pics and other_evidence,
     under a unique {claim_id}_{timestamp} folder. Saves full claim information JSON in
-    root folder data/Claim_Data/unique_claim_information.
+    root folder data/Claim_Data/unique_claim_information and persists the record to Azure PostgreSQL.
     """
     # 1. Ensure unique claim ID
     if not claim_id or not claim_id.strip():
@@ -156,7 +291,7 @@ def store_claim_files_and_metadata(
         saved_metadata_path=str(json_path),
     )
 
-    # Write JSON to unique path
+    # Write JSON to unique path (older data format completely untouched)
     json_content = json.dumps(response_data.model_dump(), indent=2)
     json_path.write_text(json_content, encoding="utf-8")
 
@@ -164,8 +299,21 @@ def store_claim_files_and_metadata(
     latest_path = metadata_dir / f"{claim_id}.json"
     latest_path.write_text(json_content, encoding="utf-8")
 
+    # 4. Save to separate PostgreSQL table (claim_storage_records) for blob storage uploads
+    # Note: detailed_report is saved at a later stage, so it is initially None
+    db_saved = save_claim_storage_to_postgres(
+        claim_id=claim_id,
+        user_name=user_name.strip() if user_name and user_name.strip() else None,
+        status=current_status,
+        vehicle_pic_folder=storage_details.vehicle_pics_folder,
+        other_document_folder_details=storage_details.other_evidence_folder,
+        description=claim_description,
+        detailed_report=None,
+        claim_folder_json=response_data.model_dump(),
+    )
+
     logger.info(
-        f"Claim {claim_id} files stored in {folder_name}. Metadata saved to {json_path}"
+        f"Claim {claim_id} files stored in {folder_name}. Metadata saved to {json_path}. Dedicated DB record saved: {db_saved}"
     )
 
     return response_data
