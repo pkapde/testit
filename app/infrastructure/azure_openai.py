@@ -109,7 +109,7 @@ def classify_document(*, file_name: str, content: bytes, extracted_text: str) ->
         response = client.chat.completions.create(
             model=configured_model_name(),
             messages=[{"role": "user", "content": content_part}],
-            temperature=0,
+            temperature=1,
             response_format={"type": "json_object"},
         )
         payload = json.loads(response.choices[0].message.content or "{}")
@@ -150,7 +150,7 @@ def extract_document_fields(*, file_name: str, document_type: DocumentType, extr
         response = client.chat.completions.create(
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+            temperature=1,
             response_format={"type": "json_object"},
         )
         payload = json.loads(response.choices[0].message.content or "{}")
@@ -192,7 +192,7 @@ def assess_cross_document_consistency(extracted_fields: dict[str, dict[str, str]
         response = client.chat.completions.create(
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+            temperature=1,
             response_format={"type": "json_object"},
         )
         payload = json.loads(response.choices[0].message.content or "{}")
@@ -244,7 +244,7 @@ def assess_fraud_hypotheses(extracted_fields: dict[str, dict[str, str]], determi
         response = client.chat.completions.create(
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+            temperature=1,
             response_format={"type": "json_object"},
         )
         payload = json.loads(response.choices[0].message.content or "{}")
@@ -281,7 +281,7 @@ def explain_coverage(*, facts: dict[str, str], clauses: list[dict[str, str]]) ->
               f"Facts: {json.dumps(facts)} Clauses: {json.dumps(clauses)}")
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=0, response_format={"type": "json_object"})
+        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
         explanation = str(json.loads(response.choices[0].message.content or "{}").get("explanation", "")).strip()[:2000]
         return explanation or None
     except Exception as exc:
@@ -304,7 +304,7 @@ def answer_policy_enquiry(*, query: str, clauses: list[dict[str, str]]) -> str |
         response = client.chat.completions.create(
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+            temperature=1,
             response_format={"type": "json_object"},
         )
         answer = str(json.loads(response.choices[0].message.content or "{}").get("answer", "")).strip()[:2000]
@@ -323,7 +323,7 @@ def generate_claim_assessment(*, summary: str, evidence: list[str], checklist: l
               f"Summary: {summary} Evidence: {json.dumps(evidence)} Checklist: {json.dumps(checklist)}")
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=0, response_format={"type": "json_object"})
+        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
         payload = json.loads(response.choices[0].message.content or "{}")
         text = str(payload.get("case_summary", "")).strip()[:2000]
         items = [str(item).strip()[:500] for item in payload.get("reviewer_checklist", []) if str(item).strip()][:10]
@@ -343,7 +343,7 @@ def explain_settlement_recommendation(*, preliminary_amount: str, basis: list[st
               f"Amount: INR {preliminary_amount}. Basis: {json.dumps(basis)}")
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=0, response_format={"type": "json_object"})
+        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
         text = str(json.loads(response.choices[0].message.content or "{}").get("explanation", "")).strip()[:1500]
         return text or None
     except Exception as exc:

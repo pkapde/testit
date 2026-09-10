@@ -2,11 +2,11 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from app.schemas.claim_storage import ClaimStorageResponse
 from app.schemas.classification import ClassificationCategory, ClassificationResponse
 from app.schemas.documents import DocumentType, ReviewDecisionRequest
-from app.services.claim_storage import store_claim_files_and_metadata
 from app.services.document_classifier import UploadedDoc, classify_documents
 from app.services.claim_storage import (
     get_all_claims_json_from_postgres,
     get_claim_details_json_from_postgres,
+    save_completed_workflow_report,
     store_claim_files_and_metadata,
 )
 from app.services.triage import triage_claim
@@ -136,14 +136,16 @@ async def classify_and_check_completeness(
 
 @router.post("/{claim_id}/triage")
 async def triage_claim_documents(claim_id: str, files: list[UploadFile] = File(...)):
-    """Run the workflow and persist a Claims Adjuster task when PostgreSQL is configured."""
+    """Run the workflow, save the completed local JSON, and persist review data when configured."""
     items = [IncomingFile(name=file.filename or "unnamed", content=await file.read()) for file in files]
     workflow = run_claim_workflow(claim_id, items)
+    result = workflow["triage"]
+    save_completed_workflow_report(claim_id, result)
     if settings.database_url:
         from app.services.persistence import persist_triage_result
 
-        persist_triage_result(workflow["triage"], items)
-    return workflow["triage"]
+        persist_triage_result(result, items)
+    return result
 
 
 @router.post("/{claim_id}/ingest")

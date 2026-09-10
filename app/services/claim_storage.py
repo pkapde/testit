@@ -122,11 +122,18 @@ def get_all_claims_json_from_postgres() -> list[dict]:
         project_root = Path(__file__).resolve().parents[2]
         metadata_dir = project_root / "Data" / "Claim_Data" / "unique_claim_information"
         if metadata_dir.exists():
+            seen_claim_ids: set[str] = set()
             for json_file in sorted(metadata_dir.glob("CLM-*_*.json"), reverse=True):
                 try:
-                    results.append(json.loads(json_file.read_text(encoding="utf-8")))
-                except Exception:
-                    pass
+                    claim_json = json.loads(json_file.read_text(encoding="utf-8"))
+                    claim_id = str(claim_json.get("claim_id", "")).strip().upper()
+                    if claim_id and claim_id in seen_claim_ids:
+                        continue
+                    if claim_id:
+                        seen_claim_ids.add(claim_id)
+                    results.append(claim_json)
+                except (OSError, json.JSONDecodeError, AttributeError):
+                    continue
 
     return results
 
@@ -171,6 +178,64 @@ def update_claim_detailed_report(claim_id: str, detailed_report: Any) -> bool:
     except Exception as exc:
         logger.warning(f"Failed to update detailed_report for claim {claim_id}: {exc}")
         return False
+
+
+def save_completed_workflow_report(claim_id: str, workflow_result: Any) -> str:
+    """Merge a completed workflow result into the claim's local metadata JSON.
+
+    Upload metadata is written as soon as Blob Storage accepts the original
+    documents. This function is deliberately called only after the automated
+    workflow succeeds, so the final JSON contains both the storage manifest
+    and the classification, extraction, validation, fraud, coverage, and
+    Claims Adjuster routing results.
+    """
+    normalized_claim_id = claim_id.strip().upper()
+    if hasattr(workflow_result, "model_dump"):
+        workflow_payload = workflow_result.model_dump(mode="json")
+    elif isinstance(workflow_result, dict):
+        workflow_payload = workflow_result
+    else:
+        raise ValueError("workflow_result must be a serializable workflow response")
+
+    project_root = Path(__file__).resolve().parents[2]
+    metadata_dir = project_root / "Data" / "Claim_Data" / "unique_claim_information"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    latest_path = metadata_dir / f"{normalized_claim_id}.json"
+
+    claim_payload: dict[str, Any] = {"claim_id": normalized_claim_id}
+    if latest_path.exists():
+        try:
+            previous_payload = json.loads(latest_path.read_text(encoding="utf-8"))
+            if isinstance(previous_payload, dict):
+                claim_payload = previous_payload
+        except (OSError, json.JSONDecodeError):
+            logger.warning("Could not read existing local metadata for claim %s", normalized_claim_id)
+
+    completed_at = datetime.now(timezone.utc).isoformat()
+    claim_payload["workflow"] = workflow_payload
+    claim_payload["workflow_completed_at"] = completed_at
+    claim_payload["workflow_status"] = "COMPLETED"
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    completed_path = metadata_dir / f"{normalized_claim_id}_{timestamp}_workflow.json"
+    serialized_payload = json.dumps(claim_payload, indent=2, ensure_ascii=False)
+    completed_path.write_text(serialized_payload, encoding="utf-8")
+    latest_path.write_text(serialized_payload, encoding="utf-8")
+
+    try:
+        from app.infrastructure.postgres import ClaimStorageRecord, session_scope
+
+        with session_scope() as session:
+            record = session.get(ClaimStorageRecord, normalized_claim_id)
+            if record:
+                record.detailed_report = workflow_payload
+                record.claim_folder_json = claim_payload
+    except Exception as exc:
+        # Local JSON is the required durable fallback when PostgreSQL is not configured.
+        logger.warning("Could not save completed workflow for claim %s to PostgreSQL: %s", normalized_claim_id, exc)
+
+    logger.info("Saved completed workflow JSON for claim %s to %s", normalized_claim_id, completed_path)
+    return str(completed_path)
 
 
 def store_claim_files_and_metadata(
