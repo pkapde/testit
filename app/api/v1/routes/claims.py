@@ -1,9 +1,11 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from app.schemas.claim_storage import ClaimStorageResponse
 from app.schemas.classification import ClassificationCategory, ClassificationResponse
 from app.schemas.documents import DocumentType, ReviewDecisionRequest
 from app.services.document_classifier import UploadedDoc, classify_documents
 from app.services.claim_storage import (
+    _get_azure_blob_service,
     get_all_claims_json_from_postgres,
     get_claim_details_json_from_postgres,
     save_completed_workflow_report,
@@ -258,5 +260,49 @@ def get_claim_details(claim_id: str) -> dict:
             detail=f"Claim details for {claim_id} not found in database.",
         )
     return details
+
+
+@router.get(
+    "/{claim_id}/documents/{filename}",
+    summary="Download a claim document through the API",
+    description=(
+        "Streams a document that belongs to a claim from its private Azure Blob container. "
+        "The container remains private; callers never need a public Blob URL."
+    ),
+)
+def download_claim_document(claim_id: str, filename: str) -> Response:
+    """Serve an uploaded claim file only when it is listed in that claim's manifest."""
+    details = get_claim_details_json_from_postgres(claim_id)
+    if not details:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found.")
+
+    requested = filename.strip()
+    manifest = [*(details.get("vehicle_pics") or []), *(details.get("other_evidence") or [])]
+    stored_file = next((item for item in manifest if item.get("filename") == requested), None)
+    if not stored_file:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found for this claim.")
+
+    blob_service = _get_azure_blob_service()
+    if not blob_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Azure Storage is not configured.",
+        )
+
+    try:
+        container = (details.get("storage_details") or {}).get("container") or settings.azure_storage_container
+        blob_path = stored_file.get("blob_path")
+        if not container or not blob_path:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document storage metadata is incomplete.")
+        content = blob_service.get_blob_client(container=container, blob=blob_path).download_blob().readall()
+        return Response(
+            content=content,
+            media_type=stored_file.get("content_type") or "application/octet-stream",
+            headers={"Content-Disposition": f'inline; filename="{requested}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to retrieve the stored document.") from exc
 
 
