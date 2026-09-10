@@ -87,6 +87,14 @@ def _money_string(value: str | None) -> str | None:
     return f"{amount:.2f}" if amount is not None else None
 
 
+def _policy_number(value: str | None) -> str | None:
+    """Keep a policy identifier separate from neighbouring OCR/table labels."""
+    if not value:
+        return None
+    match = re.search(r"[A-Z0-9][A-Z0-9/_-]{2,99}", value.upper())
+    return match.group(0) if match else None
+
+
 def _put(fields: dict[str, str], key: str, value: str | None, transform=lambda value: value) -> None:
     if value:
         transformed = transform(value)
@@ -147,7 +155,7 @@ def extract_fields(text: str, document_type: DocumentType) -> dict[str, str]:
         _put(fields, "engine_number", _label_value(text, ("engine number", "engine no")), lambda value: value.upper())
         _put(fields, "registration_date", _label_value(text, ("date of registration",)), _date_string)
     elif document_type == DocumentType.POLICY:
-        _put(fields, "policy_number", _label_value(text, ("policy number", "policy no")), lambda value: value.upper())
+        _put(fields, "policy_number", _label_value(text, ("policy number", "policy no")), _policy_number)
         period = _label_value(text, ("period of insurance", "policy period"))
         if period:
             dates = re.findall(DATE_TOKEN, period)

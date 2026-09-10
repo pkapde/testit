@@ -25,6 +25,21 @@ def triage_documents(state: ClaimWorkflowState) -> ClaimWorkflowState:
     return {"triage": result}
 
 
+def validate_policy_eligibility(state: ClaimWorkflowState) -> ClaimWorkflowState:
+    """Policy Eligibility Gate: run before fraud and all later claim agents."""
+    from app.services.policy_validation import apply_policy_validation
+
+    return {"triage": apply_policy_validation(state["triage"])}
+
+
+def route_after_policy_validation(state: ClaimWorkflowState) -> Literal["fraud_detection", "claims_adjuster_review"]:
+    """Do not run fraud/coverage/assessment for invalid or incomplete policy evidence."""
+    policy_validation = state["triage"].policy_validation
+    if policy_validation and policy_validation.status.value == "VALID":
+        return "fraud_detection"
+    return "claims_adjuster_review"
+
+
 def detect_fraud(state: ClaimWorkflowState) -> ClaimWorkflowState:
     """Phase 3 fraud-risk agent; records explainable indicators before routing."""
     from app.services.fraud import apply_fraud_assessment
@@ -68,6 +83,7 @@ def create_claim_workflow():
     graph = StateGraph(ClaimWorkflowState)
     graph.add_node("validate", validate_documents)
     graph.add_node("triage", triage_documents)
+    graph.add_node("policy_eligibility", validate_policy_eligibility)
     graph.add_node("fraud_detection", detect_fraud)
     graph.add_node("coverage_assessment", assess_coverage)
     graph.add_node("claim_assessment", prepare_claim_assessment)
@@ -75,7 +91,8 @@ def create_claim_workflow():
     graph.add_node("claims_adjuster_review", claims_adjuster_review)
     graph.add_edge(START, "validate")
     graph.add_edge("validate", "triage")
-    graph.add_edge("triage", "fraud_detection")
+    graph.add_edge("triage", "policy_eligibility")
+    graph.add_conditional_edges("policy_eligibility", route_after_policy_validation)
     graph.add_edge("fraud_detection", "coverage_assessment")
     graph.add_edge("coverage_assessment", "claim_assessment")
     graph.add_edge("claim_assessment", "settlement_recommendation")

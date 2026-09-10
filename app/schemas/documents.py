@@ -126,6 +126,31 @@ class CoverageDecision(str, Enum):
     NOT_COVERED = "NOT_COVERED"
 
 
+class PolicyValidationStatus(str, Enum):
+    """Outcome of the pre-workflow policy schedule eligibility gate."""
+
+    VALID = "VALID"
+    INVALID = "INVALID"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
+class PolicyValidationResult(BaseModel):
+    """Evidence-based policy status before downstream claim agents run.
+
+    This verifies the submitted policy schedule only. A production insurer
+    integration can later add an authoritative policy-administration lookup.
+    """
+
+    status: PolicyValidationStatus
+    message: str
+    policy_number: str | None = None
+    policy_start_date: str | None = None
+    policy_end_date: str | None = None
+    accident_date: str | None = None
+    recommended_action: str = "REQUEST_REVIEW"
+    evidence: dict[str, str] = Field(default_factory=dict)
+
+
 class CoverageFinding(BaseModel):
     rule_id: str
     outcome: str
@@ -158,6 +183,7 @@ class ClaimTriageResult(BaseModel):
     agentic_findings: list[AgenticFinding] = Field(default_factory=list)
     fraud_risk_level: FraudRiskLevel = FraudRiskLevel.LOW
     fraud_findings: list[FraudFinding] = Field(default_factory=list)
+    policy_validation: PolicyValidationResult | None = None
     coverage_decision: CoverageDecision | None = None
     coverage_findings: list[CoverageFinding] = Field(default_factory=list)
     coverage_explanation: str | None = None
