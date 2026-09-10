@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.infrastructure.postgres import AuditEvent, ClaimRecord, ReviewTaskRecord, session_scope
+from app.infrastructure.postgres import AuditEvent, ClaimRecord, ClaimStorageRecord, ReviewTaskRecord, session_scope
 from app.schemas.documents import ClaimTriageResult, ReviewAction, ReviewTaskResponse, ReviewTaskStatus
 
 
@@ -93,6 +93,7 @@ def list_review_tasks(claim_id: str) -> list[ReviewTaskResponse]:
 
 def resolve_review_task(task_id: str, action: ReviewAction, reviewer_id: str, comment: str) -> ReviewTaskResponse:
     """Record a human decision and make the claim eligible for its next controlled stage."""
+    resolved_at = datetime.now(timezone.utc)
     with session_scope() as session:
         task = session.get(ReviewTaskRecord, task_id)
         if not task:
@@ -105,14 +106,41 @@ def resolve_review_task(task_id: str, action: ReviewAction, reviewer_id: str, co
         task.reviewer_id = reviewer_id
         task.comment = comment
         task.resumed_to = resumed_to
-        task.resolved_at = datetime.now(timezone.utc)
+        task.resolved_at = resolved_at
         claim = session.get(ClaimRecord, task.claim_id)
         if claim:
             claim.status = resumed_to
+        storage_claim = session.get(ClaimStorageRecord, task.claim_id)
+        if storage_claim:
+            storage_claim.status = resumed_to
+            stored_payload = dict(storage_claim.claim_folder_json or {"claim_id": task.claim_id})
+            stored_payload["status"] = resumed_to
+            stored_payload["workflow_status"] = resumed_to
+            stored_payload["human_review"] = {
+                "stage": "CLAIMS_ADJUSTER_REVIEW",
+                "decision": action.value,
+                "reviewer_id": reviewer_id,
+                "comment": comment,
+                "resolved_at": resolved_at.isoformat(),
+            }
+            storage_claim.claim_folder_json = stored_payload
         session.add(AuditEvent(
             claim_id=task.claim_id,
             event_type="DOCUMENT_REVIEW_TASK_RESOLVED",
             payload={"task_id": task.task_id, "action": action.value, "reviewer_id": reviewer_id, "comment": comment, "resumed_to": resumed_to},
         ))
         session.flush()
-        return _to_response(task)
+        response = _to_response(task)
+
+    # The local JSON is the intentional fallback when PostgreSQL is unavailable.
+    from app.services.claim_storage import save_claim_review_decision_to_local_metadata
+
+    save_claim_review_decision_to_local_metadata(
+        response.claim_id,
+        status=response.resumed_to or resumed_to,
+        action=action.value,
+        reviewer_id=reviewer_id,
+        comment=comment,
+        resolved_at=resolved_at.isoformat(),
+    )
+    return response

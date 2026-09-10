@@ -238,6 +238,38 @@ def save_completed_workflow_report(claim_id: str, workflow_result: Any) -> str:
     return str(completed_path)
 
 
+def save_claim_review_decision_to_local_metadata(
+    claim_id: str,
+    *,
+    status: str,
+    action: str,
+    reviewer_id: str,
+    comment: str,
+    resolved_at: str,
+) -> None:
+    """Keep the local JSON fallback aligned with a durable adjuster decision."""
+    project_root = Path(__file__).resolve().parents[2]
+    latest_path = project_root / "Data" / "Claim_Data" / "unique_claim_information" / f"{claim_id.strip().upper()}.json"
+    if not latest_path.exists():
+        return
+    try:
+        payload = json.loads(latest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return
+        payload["status"] = status
+        payload["workflow_status"] = status
+        payload["human_review"] = {
+            "stage": "CLAIMS_ADJUSTER_REVIEW",
+            "decision": action,
+            "reviewer_id": reviewer_id,
+            "comment": comment,
+            "resolved_at": resolved_at,
+        }
+        latest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        logger.warning("Could not update local review decision for claim %s: %s", claim_id, exc)
+
+
 def store_claim_files_and_metadata(
     files: list[tuple[str, bytes, str | None]],
     claim_id: str | None = None,
