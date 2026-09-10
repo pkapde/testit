@@ -24,7 +24,11 @@ def test_adjuster_decision_updates_claim_storage_record_for_portals():
             ClaimStorageRecord(
                 claim_id="CLM-DECISION-1",
                 status="PENDING_VERIFICATION",
-                claim_folder_json={"claim_id": "CLM-DECISION-1", "status": "PENDING_VERIFICATION"},
+                claim_folder_json={
+                    "claim_id": "CLM-DECISION-1",
+                    "status": "PENDING_VERIFICATION",
+                    "workflow": {"extracted_fields": {"estimate.pdf": {"estimate_total": "40120.00"}}},
+                },
             )
         )
         session.add(
@@ -47,13 +51,16 @@ def test_adjuster_decision_updates_claim_storage_record_for_portals():
             ReviewAction.APPROVE_CLAIM,
             "adjuster-1",
             "Evidence reviewed and approved.",
+            deductible=500,
         )
 
     assert response.resumed_to == "APPROVED"
+    assert response.approved_amount == "39620.00"
     with TestSession() as session:
         assert session.get(ClaimRecord, "CLM-DECISION-1").status == "APPROVED"
         stored = session.get(ClaimStorageRecord, "CLM-DECISION-1")
         assert stored.status == "APPROVED"
         assert stored.claim_folder_json["status"] == "APPROVED"
         assert stored.claim_folder_json["human_review"]["decision"] == "APPROVE_CLAIM"
+        assert stored.claim_folder_json["human_review"]["approved_amount"] == "39620.00"
     save_local.assert_called_once()

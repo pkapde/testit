@@ -176,7 +176,13 @@ async def submit_review_decision(task_id: str, request: ReviewDecisionRequest):
     """Resolve the single Claims Adjuster review and record its controlled outcome."""
     from app.services.review import resolve_review_task
     try:
-        return resolve_review_task(task_id, request.action, request.reviewer_id, request.comment)
+        return resolve_review_task(
+            task_id,
+            request.action,
+            request.reviewer_id,
+            request.comment,
+            deductible=request.deductible,
+        )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:

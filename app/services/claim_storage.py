@@ -246,6 +246,8 @@ def save_claim_review_decision_to_local_metadata(
     reviewer_id: str,
     comment: str,
     resolved_at: str,
+    deductible: str | None = None,
+    approved_amount: str | None = None,
 ) -> None:
     """Keep the local JSON fallback aligned with a durable adjuster decision."""
     project_root = Path(__file__).resolve().parents[2]
@@ -258,13 +260,17 @@ def save_claim_review_decision_to_local_metadata(
             return
         payload["status"] = status
         payload["workflow_status"] = status
-        payload["human_review"] = {
+        human_review = {
             "stage": "CLAIMS_ADJUSTER_REVIEW",
             "decision": action,
             "reviewer_id": reviewer_id,
             "comment": comment,
             "resolved_at": resolved_at,
         }
+        if action == "APPROVE_CLAIM":
+            human_review["deductible"] = deductible
+            human_review["approved_amount"] = approved_amount
+        payload["human_review"] = human_review
         latest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     except (OSError, json.JSONDecodeError, TypeError) as exc:
         logger.warning("Could not update local review decision for claim %s: %s", claim_id, exc)

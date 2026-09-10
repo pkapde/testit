@@ -71,6 +71,7 @@ class ReviewDecisionRequest(BaseModel):
     action: ReviewAction
     reviewer_id: str = Field(min_length=1, max_length=100)
     comment: str = Field(min_length=3, max_length=2000)
+    deductible: float | None = Field(default=None, ge=0, description="Human-confirmed deductible or adjustment amount in INR.")
 
 
 class ReviewTaskResponse(BaseModel):
@@ -84,6 +85,7 @@ class ReviewTaskResponse(BaseModel):
     reviewer_id: str | None = None
     comment: str | None = None
     resumed_to: str | None = None
+    approved_amount: str | None = None
 
 
 class CrossDocumentIssue(BaseModel):
