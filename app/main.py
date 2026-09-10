@@ -67,6 +67,19 @@ def test_page() -> str:
     <button type=submit>Classify with Azure OpenAI</button></form>
     <pre id=classifyResult>Classification result will appear here.</pre></section>
     <hr>
+    <section><h2>LangChain RAG Pipeline (Policy Knowledge Base)</h2>
+    <p>1. Ingest <code>Data/Rag/Policu_details.json</code> with Semantic Chunking:</p>
+    <button id=btnIngest type=button>Ingest & Index Policies</button>
+    <pre id=ingestResult>Click the button above to ingest policy records.</pre>
+    
+    <p>2. Ask Policy / Claim Question (Streaming Response):</p>
+    <form id=ragForm>
+      <input id=ragQuery type=text style="width:70%" placeholder="e.g. Does policy POL-2026-98124 cover zero depreciation and engine protection?" required>
+      <button type=submit>Ask Question (Stream)</button>
+    </form>
+    <pre id=ragResult style="min-height:80px">Streaming response will display here token by token...</pre>
+    </section>
+    <hr>
     <section><h2>Claim Package Validator (Phase 1)</h2>
     <form id=validator><label>Claim ID <input id=claimId value=CLM-001 required></label>
     <label>Expected document type (optional)<select id=expected><option value=''>Detect automatically</option><option value=rc>Registration Certificate (RC)</option><option value=policy>Insurance Policy</option><option value=driving_licence>Driving Licence</option><option value=claim_form>Claim Form</option><option value=fir>FIR / Police Report</option><option value=garage_estimate>Garage Estimate</option><option value=repair_invoice>Repair Invoice</option></select></label>
@@ -82,6 +95,35 @@ def test_page() -> str:
         classifyResult.textContent='Classifying with Azure OpenAI...';
         const response=await fetch('/api/v1/claims/classification',{method:'POST',body:form});
         classifyResult.textContent=JSON.stringify(await response.json(),null,2);
+    });
+    document.querySelector('#btnIngest').addEventListener('click',async()=>{
+        ingestResult.textContent='Ingesting and semantically chunking policies...';
+        try{
+            const res=await fetch('/api/v1/claims/ingest',{method:'POST'});
+            ingestResult.textContent=JSON.stringify(await res.json(),null,2);
+        }catch(e){
+            ingestResult.textContent='Error: '+e;
+        }
+    });
+    document.querySelector('#ragForm').addEventListener('submit',async event=>{
+        event.preventDefault();
+        ragResult.textContent='';
+        try{
+            const res=await fetch('/api/v1/claims/askClaimDetails',{
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({query:ragQuery.value})
+            });
+            const reader=res.body.getReader();
+            const decoder=new TextDecoder();
+            while(true){
+                const {value,done}=await reader.read();
+                if(done)break;
+                ragResult.textContent+=decoder.decode(value,{stream:true});
+            }
+        }catch(e){
+            ragResult.textContent='Streaming error: '+e;
+        }
     });
     document.querySelector('#validator').addEventListener('submit',async event=>{
         event.preventDefault();

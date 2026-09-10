@@ -1,7 +1,9 @@
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 from app.schemas.claim_storage import ClaimStorageResponse
 from app.schemas.classification import ClassificationCategory, ClassificationResponse
 from app.schemas.documents import DocumentType, ReviewDecisionRequest
+from app.schemas.rag import AskClaimRequest, IngestResponse
 from app.services.document_classifier import UploadedDoc, classify_documents
 from app.services.claim_storage import (
     get_all_claims_json_from_postgres,
@@ -9,6 +11,7 @@ from app.services.claim_storage import (
     save_completed_workflow_report,
     store_claim_files_and_metadata,
 )
+from app.services.rag_service import ingest_policy_data, stream_claim_details
 from app.services.triage import triage_claim
 from app.services.validator import IncomingFile, validate_claim
 from app.services.workflow import run_claim_workflow
@@ -258,5 +261,85 @@ def get_claim_details(claim_id: str) -> dict:
             detail=f"Claim details for {claim_id} not found in database.",
         )
     return details
+
+
+@router.post(
+    "/ingest",
+    response_model=IngestResponse,
+    summary="Ingest policy details JSON, apply semantic chunking, and index into vector store",
+    description=(
+        "Loads policy details from Data/Rag/Policu_details.json (or configured path), "
+        "applies LangChain's SemanticChunker using Azure OpenAI text_embedding_small model, "
+        "and indexes the chunks into a vector store."
+    ),
+)
+@router.post(
+    "/rag/ingest",
+    response_model=IngestResponse,
+    include_in_schema=False,
+)
+async def ingest_policies() -> IngestResponse:
+    try:
+        policies_count, chunks_count = ingest_policy_data()
+        return IngestResponse(
+            status="success",
+            policies_loaded=policies_count,
+            chunks_created=chunks_count,
+            message=(
+                f"Successfully loaded {policies_count} policies, applied semantic chunking "
+                f"to create {chunks_count} chunks, and indexed into vector store."
+            ),
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to ingest policy documents: {str(exc)}",
+        ) from exc
+
+
+@router.post(
+    "/askClaimDetails",
+    summary="Ask claim or policy question with streaming response",
+    description=(
+        "Retrieves the most semantically relevant policy chunks from the vector store, "
+        "invokes the LangChain RAG chain with Azure OpenAI model, and streams the answer token by token."
+    ),
+)
+async def ask_claim_details(request: AskClaimRequest):
+    if not request.query.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query string cannot be empty.",
+        )
+
+    async def event_generator():
+        try:
+            async for token in stream_claim_details(request.query, k=request.k):
+                yield token
+        except Exception as exc:
+            yield f"\n[Error generating response: {str(exc)}]"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get(
+    "/askClaimDetails",
+    summary="Ask claim question via GET for quick testing with streaming response",
+    include_in_schema=False,
+)
+async def ask_claim_details_get(query: str = Query(..., min_length=1), k: int = Query(3, ge=1, le=10)):
+    return await ask_claim_details(AskClaimRequest(query=query, k=k))
 
 
