@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 import re
 
 from app.core.config import settings
-from app.schemas.documents import AgenticFinding, ClaimTriageResult, CrossDocumentIssue, DocumentType, FieldValidationIssue, FileStatus, TriageQueue
+from app.schemas.documents import AgenticFinding, ClaimTriageResult, CrossDocumentIssue, DocumentReviewBrief, DocumentType, FieldValidationIssue, FileStatus, TriageQueue
 from app.services.validator import IncomingFile, _extract_text, validate_claim
 
 VEHICLE_REGISTRATION = re.compile(r"\b([A-Z]{2})\s?(\d{1,2})\s?([A-Z]{1,3})\s?(\d{4})\b", re.IGNORECASE)
@@ -244,6 +244,41 @@ def _field_validation_issues(validation, extracted: dict[str, dict[str, str]]) -
     return issues
 
 
+def _document_review_briefs(validation, extracted: dict[str, dict[str, str]], methods: dict[str, str]) -> dict[str, DocumentReviewBrief]:
+    """Persist a safe, document-by-document reviewer aid from Azure OpenAI when configured."""
+    from app.infrastructure.azure_openai import generate_document_review_brief
+
+    briefs: dict[str, DocumentReviewBrief] = {}
+    for outcome in validation.files:
+        fields = extracted.get(outcome.file_name, {})
+        default_summary = (
+            f"{outcome.detected_document.value.replace('_', ' ').title()} evidence is available for the claims-adjuster review."
+            if outcome.status == FileStatus.VALID
+            else "Use this document alongside the rest of the claim package during human review."
+        )
+        generated = generate_document_review_brief(
+            file_name=outcome.file_name,
+            document_type=outcome.detected_document,
+            classification_evidence=outcome.evidence,
+            extracted_fields=fields,
+        )
+        if generated:
+            briefs[outcome.file_name] = DocumentReviewBrief(
+                recommendation=str(generated["recommendation"]),
+                summary=str(generated["summary"]),
+                review_points=list(generated.get("review_points", [])),
+                generation_method="AZURE_OPENAI",
+            )
+        else:
+            briefs[outcome.file_name] = DocumentReviewBrief(
+                recommendation="SUPPORTS_CLAIM_REVIEW" if outcome.status == FileStatus.VALID else "CONFIRM_DOCUMENT_ALIGNMENT",
+                summary=default_summary,
+                review_points=[item for item in outcome.evidence if not any(word in item.lower() for word in ("missing", "could not", "required", "unreadable"))][:2],
+                generation_method=methods.get(outcome.file_name, "DETERMINISTIC"),
+            )
+    return briefs
+
+
 def build_triage_result(validation, items: list[IncomingFile]) -> ClaimTriageResult:
     extracted: dict[str, dict[str, str]] = {}
     extraction_method_by_document: dict[str, str] = {}
@@ -273,6 +308,7 @@ def build_triage_result(validation, items: list[IncomingFile]) -> ClaimTriageRes
     if variance_issue:
         issues.append(variance_issue)
     agentic_findings = _agentic_cross_document_findings(extracted)
+    document_review_briefs = _document_review_briefs(validation, extracted, extraction_method_by_document)
     agentic_review_required = any(finding.assessment in {"INCONSISTENT", "NEEDS_REVIEW"} for finding in agentic_findings)
 
     if validation.overall_status != "COMPLETE" or field_issues:
@@ -283,7 +319,7 @@ def build_triage_result(validation, items: list[IncomingFile]) -> ClaimTriageRes
         queue, reason = TriageQueue.READY_FOR_EXTRACTION, "Document package is complete and contains no detected cross-document inconsistency."
     if field_issues and validation.overall_status == "COMPLETE":
         reason = "A required document is missing a usable core field and requires document verification."
-    return ClaimTriageResult(validation=validation, extracted_fields=extracted, extraction_method_by_document=extraction_method_by_document, field_validation_issues=field_issues, cross_document_issues=issues, agentic_findings=agentic_findings, routing_queue=queue, routing_reason=reason)
+    return ClaimTriageResult(validation=validation, extracted_fields=extracted, extraction_method_by_document=extraction_method_by_document, document_review_briefs=document_review_briefs, field_validation_issues=field_issues, cross_document_issues=issues, agentic_findings=agentic_findings, routing_queue=queue, routing_reason=reason)
 
 
 def triage_claim(claim_id: str, items: list[IncomingFile]) -> ClaimTriageResult:

@@ -96,6 +96,17 @@ In production, deploy the app with an Azure Managed Identity. Grant it Blob Data
 
 For production, configure authentication/authorization, a managed object store, malware scanning, Azure OCR/Document Intelligence, a database-backed audit trail, secret management, rate limits, observability, and CI/CD before deployment.
 
+## Local user-account pilot
+
+The application includes an optional local-account flow for a controlled pilot, so Entra ID is not required before the claim workflow can be demonstrated. `local_users` stores a PBKDF2 password hash, and `claim_storage_records.owner_user_id` links each new claim to its policyholder. The browser receives a time-limited signed bearer token; passwords are never stored in local storage or PostgreSQL as plaintext.
+
+1. Keep `AUTH_REQUIRED=false` during transition. Existing demo/API behavior remains unchanged.
+2. Set a long random `LOCAL_AUTH_SECRET`, set `AUTH_REQUIRED=true`, restart the API, and create a policyholder at `POST /api/v1/auth/register` or through the login screen.
+3. New claims are owned by that local account. A claimant sees only their own claims; a validator can view the queue and make a decision. Existing unowned records remain available only while transition mode is enabled.
+4. Validator self-registration is disabled by default. For a short controlled demo only, set `LOCAL_AUTH_ALLOW_VALIDATOR_REGISTRATION=true`, create the validator account, then turn it back off.
+
+This is a pilot identity provider, not an enterprise SSO replacement. Entra ID can later replace the local login endpoints while retaining the `owner_user_id`, roles, claim workflow, decision audit, and UI API contracts.
+
 ## Test
 
 ```powershell

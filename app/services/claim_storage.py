@@ -43,6 +43,7 @@ def _get_azure_blob_service():
 def save_claim_storage_to_postgres(
     claim_id: str,
     user_name: str | None,
+    owner_user_id: str | None,
     status: str,
     vehicle_pic_folder: str,
     other_document_folder_details: str,
@@ -71,6 +72,7 @@ def save_claim_storage_to_postgres(
                 session.add(record)
 
             record.user_name = user_name
+            record.owner_user_id = owner_user_id
             record.status = status
             record.vehicle_pic_folder = vehicle_pic_folder
             record.other_document_folder_details = other_document_folder_details
@@ -85,7 +87,7 @@ def save_claim_storage_to_postgres(
         return False
 
 
-def get_all_claims_json_from_postgres() -> list[dict]:
+def get_all_claims_json_from_postgres(owner_user_id: str | None = None) -> list[dict]:
     """
     Retrieve all claims and their details JSON from Azure PostgreSQL claim_storage_records table.
     Returns the JSON stored under the claim_folder_json column (the exact details JSON returned after saving files to storage).
@@ -96,12 +98,16 @@ def get_all_claims_json_from_postgres() -> list[dict]:
         from app.infrastructure.postgres import ClaimStorageRecord, session_scope
         with session_scope() as session:
             stmt = select(ClaimStorageRecord).order_by(ClaimStorageRecord.created_at.desc())
+            if owner_user_id:
+                stmt = stmt.where(ClaimStorageRecord.owner_user_id == owner_user_id)
             records = session.scalars(stmt).all()
             for r in records:
                 if r.claim_folder_json:
                     claim_json = dict(r.claim_folder_json)
                     if r.user_name and "user_name" not in claim_json:
                         claim_json["user_name"] = r.user_name
+                    if r.owner_user_id and "owner_user_id" not in claim_json:
+                        claim_json["owner_user_id"] = r.owner_user_id
                     results.append(claim_json)
                 else:
                     results.append({
@@ -131,7 +137,8 @@ def get_all_claims_json_from_postgres() -> list[dict]:
                         continue
                     if claim_id:
                         seen_claim_ids.add(claim_id)
-                    results.append(claim_json)
+                    if not owner_user_id or claim_json.get("owner_user_id") == owner_user_id:
+                        results.append(claim_json)
                 except (OSError, json.JSONDecodeError, AttributeError):
                     continue
 
@@ -238,6 +245,36 @@ def save_completed_workflow_report(claim_id: str, workflow_result: Any) -> str:
     return str(completed_path)
 
 
+def set_claim_processing_status(claim_id: str, workflow_status: str, error: str | None = None) -> None:
+    """Persist background-processing progress without exposing internal errors to users."""
+    normalized_claim_id = claim_id.strip().upper()
+    project_root = Path(__file__).resolve().parents[2]
+    latest_path = project_root / "Data" / "Claim_Data" / "unique_claim_information" / f"{normalized_claim_id}.json"
+    payload: dict[str, Any] = {"claim_id": normalized_claim_id}
+    if latest_path.exists():
+        try:
+            loaded = json.loads(latest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = loaded
+        except (OSError, json.JSONDecodeError):
+            logger.warning("Could not read processing status metadata for claim %s", normalized_claim_id)
+    payload["status"] = workflow_status
+    payload["workflow_status"] = workflow_status
+    if error:
+        payload["workflow_error"] = error[:500]
+    latest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        from app.infrastructure.postgres import ClaimStorageRecord, session_scope
+
+        with session_scope() as session:
+            record = session.get(ClaimStorageRecord, normalized_claim_id)
+            if record:
+                record.status = workflow_status
+                record.claim_folder_json = payload
+    except Exception as exc:
+        logger.warning("Could not update processing status for claim %s in PostgreSQL: %s", normalized_claim_id, exc)
+
+
 def save_claim_review_decision_to_local_metadata(
     claim_id: str,
     *,
@@ -280,6 +317,7 @@ def store_claim_files_and_metadata(
     files: list[tuple[str, bytes, str | None]],
     claim_id: str | None = None,
     user_name: str | None = None,
+    owner_user_id: str | None = None,
     description: str | None = None,
     status: str | None = None,
 ) -> ClaimStorageResponse:
@@ -395,7 +433,12 @@ def store_claim_files_and_metadata(
     )
 
     # Write JSON to unique path (older data format completely untouched)
-    json_content = json.dumps(response_data.model_dump(), indent=2)
+    response_payload = response_data.model_dump()
+    # Response remains backward-compatible; the owner is persisted only in
+    # metadata and PostgreSQL, never echoed to an unrelated caller.
+    if owner_user_id:
+        response_payload["owner_user_id"] = owner_user_id
+    json_content = json.dumps(response_payload, indent=2)
     json_path.write_text(json_content, encoding="utf-8")
 
     # Also maintain latest claim_id.json for immediate lookup convenience
@@ -407,12 +450,13 @@ def store_claim_files_and_metadata(
     db_saved = save_claim_storage_to_postgres(
         claim_id=claim_id,
         user_name=user_name.strip() if user_name and user_name.strip() else None,
+        owner_user_id=owner_user_id,
         status=current_status,
         vehicle_pic_folder=storage_details.vehicle_pics_folder,
         other_document_folder_details=storage_details.other_evidence_folder,
         description=claim_description,
         detailed_report=None,
-        claim_folder_json=response_data.model_dump(),
+        claim_folder_json=response_payload,
     )
 
     logger.info(

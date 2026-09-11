@@ -1,4 +1,6 @@
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from app.schemas.claim_storage import ClaimStorageResponse
 from app.schemas.classification import ClassificationCategory, ClassificationResponse
@@ -9,14 +11,53 @@ from app.services.claim_storage import (
     get_all_claims_json_from_postgres,
     get_claim_details_json_from_postgres,
     save_completed_workflow_report,
+    set_claim_processing_status,
     store_claim_files_and_metadata,
 )
 from app.services.triage import triage_claim
 from app.services.validator import IncomingFile, validate_claim
 from app.services.workflow import run_claim_workflow
 from app.core.config import settings
+from app.services.local_auth import CurrentUser, can_access_claim, get_optional_current_user, require_validator
 
 router = APIRouter(prefix="/claims", tags=["claims"])
+logger = logging.getLogger(__name__)
+
+
+def _run_stored_claim_workflow(claim_id: str) -> None:
+    """Run the agent workflow after the upload response has returned.
+
+    Files are read from the private Blob manifest, avoiding a second browser-to-
+    API upload. The background task has no user-facing authority beyond storing
+    the same workflow result that the synchronous triage endpoint produces.
+    """
+    set_claim_processing_status(claim_id, "UNDER_ASSESSMENT")
+    try:
+        details = get_claim_details_json_from_postgres(claim_id)
+        if not details:
+            raise LookupError("Stored claim metadata was not found")
+        blob_service = _get_azure_blob_service()
+        if not blob_service:
+            raise RuntimeError("Azure Storage is not configured")
+        container = (details.get("storage_details") or {}).get("container") or settings.azure_storage_container
+        items: list[IncomingFile] = []
+        for stored_file in [*(details.get("vehicle_pics") or []), *(details.get("other_evidence") or [])]:
+            blob_path = stored_file.get("blob_path")
+            if not blob_path:
+                continue
+            content = blob_service.get_blob_client(container=container, blob=blob_path).download_blob().readall()
+            items.append(IncomingFile(
+                name=stored_file.get("filename") or "unnamed",
+                content=content,
+                expected=None,
+            ))
+        if not items:
+            raise ValueError("No stored claim documents were available for analysis")
+        workflow = run_claim_workflow(claim_id, items)
+        save_completed_workflow_report(claim_id, workflow["triage"])
+    except Exception as exc:
+        logger.exception("Background workflow failed for claim %s", claim_id)
+        set_claim_processing_status(claim_id, "ANALYSIS_FAILED", str(exc))
 
 
 @router.post(
@@ -165,21 +206,34 @@ async def ingest_claim_documents(claim_id: str, files: list[UploadFile] = File(.
 
 
 @router.get("/{claim_id}/reviews")
-async def get_claim_review_tasks(claim_id: str):
+async def get_claim_review_tasks(
+    claim_id: str,
+    current_user: CurrentUser | None = Depends(get_optional_current_user),
+):
     """List durable Claims Adjuster review tasks for a claim."""
     from app.services.review import list_review_tasks
+    if current_user or settings.auth_required:
+        require_validator(current_user)
     return list_review_tasks(claim_id)
 
 
 @router.post("/reviews/{task_id}/decision")
-async def submit_review_decision(task_id: str, request: ReviewDecisionRequest):
+async def submit_review_decision(
+    task_id: str,
+    request: ReviewDecisionRequest,
+    current_user: CurrentUser | None = Depends(get_optional_current_user),
+):
     """Resolve the single Claims Adjuster review and record its controlled outcome."""
     from app.services.review import resolve_review_task
     try:
+        # A signed claimant session must never be able to supply a validator
+        # identifier. The unauthenticated fallback exists only while the
+        # transition flag remains disabled for legacy demo calls.
+        validator = require_validator(current_user) if current_user or settings.auth_required else None
         return resolve_review_task(
             task_id,
             request.action,
-            request.reviewer_id,
+            validator.user_id if validator else request.reviewer_id,
             request.comment,
             deductible=request.deductible,
         )
@@ -203,11 +257,13 @@ async def submit_review_decision(task_id: str, request: ReviewDecisionRequest):
     ),
 )
 async def upload_claim_files_to_storage(
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(..., description="One or more files (pictures, PDFs, documents)"),
     claim_id: str | None = Form(None, description="Optional unique claim ID. Generated automatically if omitted."),
     user_name: str | None = Form(None, description="Optional user or claimant name associated with the claim."),
     description: str | None = Form(None, description="Optional claim description."),
     claim_status: str | None = Form("PENDING_VERIFICATION", description="Initial claim status."),
+    current_user: CurrentUser | None = Depends(get_optional_current_user),
 ) -> ClaimStorageResponse:
     if not files:
         raise HTTPException(
@@ -220,13 +276,16 @@ async def upload_claim_files_to_storage(
         file_tuples.append((file.filename or "unnamed", content, file.content_type))
 
     try:
-        return store_claim_files_and_metadata(
+        response = store_claim_files_and_metadata(
             files=file_tuples,
             claim_id=claim_id,
-            user_name=user_name,
+            user_name=current_user.full_name if current_user else user_name,
+            owner_user_id=current_user.user_id if current_user else None,
             description=description,
-            status=claim_status,
+            status="ANALYSIS_QUEUED",
         )
+        background_tasks.add_task(_run_stored_claim_workflow, response.claim_id)
+        return response
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -248,7 +307,9 @@ async def upload_claim_files_to_storage(
     response_model=list[dict],
     include_in_schema=False,
 )
-def get_all_claims() -> list[dict]:
+def get_all_claims(current_user: CurrentUser | None = Depends(get_optional_current_user)) -> list[dict]:
+    if current_user and current_user.role.value == "CLAIMANT":
+        return get_all_claims_json_from_postgres(owner_user_id=current_user.user_id)
     return get_all_claims_json_from_postgres()
 
 
@@ -258,13 +319,15 @@ def get_all_claims() -> list[dict]:
     summary="Get claim details JSON by claim_id from PostgreSQL",
     description="Retrieves the claim details JSON stored under the claim_folder_json column from Azure PostgreSQL.",
 )
-def get_claim_details(claim_id: str) -> dict:
+def get_claim_details(claim_id: str, current_user: CurrentUser | None = Depends(get_optional_current_user)) -> dict:
     details = get_claim_details_json_from_postgres(claim_id)
     if not details:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Claim details for {claim_id} not found in database.",
         )
+    if not can_access_claim(details, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this claim.")
     return details
 
 
@@ -276,11 +339,17 @@ def get_claim_details(claim_id: str) -> dict:
         "The container remains private; callers never need a public Blob URL."
     ),
 )
-def download_claim_document(claim_id: str, filename: str) -> Response:
+def download_claim_document(
+    claim_id: str,
+    filename: str,
+    current_user: CurrentUser | None = Depends(get_optional_current_user),
+) -> Response:
     """Serve an uploaded claim file only when it is listed in that claim's manifest."""
     details = get_claim_details_json_from_postgres(claim_id)
     if not details:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found.")
+    if not can_access_claim(details, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this claim.")
 
     requested = filename.strip()
     manifest = [*(details.get("vehicle_pics") or []), *(details.get("other_evidence") or [])]

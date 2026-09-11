@@ -2,7 +2,7 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Generator
-from sqlalchemy import DateTime, ForeignKey, JSON, String, create_engine
+from sqlalchemy import DateTime, ForeignKey, JSON, String, create_engine, inspect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 from app.core.config import settings
 
@@ -25,12 +25,28 @@ class ClaimStorageRecord(Base):
     __tablename__ = "claim_storage_records"
     claim_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Nullable during the pilot so existing storage records continue to work.
+    owner_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    assigned_validator_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING_VERIFICATION")
     vehicle_pic_folder: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     other_document_folder_details: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     detailed_report: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
     claim_folder_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class LocalUserRecord(Base):
+    """A local pilot account. It can later be linked to an Entra subject ID."""
+    __tablename__ = "local_users"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    role: Mapped[str] = mapped_column(String(30), nullable=False, default="CLAIMANT")
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -93,6 +109,14 @@ def initialize_database() -> None:
     try:
         engine = create_engine(settings.database_url, pool_pre_ping=True)
         Base.metadata.create_all(engine)
+        # create_all intentionally does not alter pre-existing tables. Add the
+        # two nullable ownership columns safely for a running pilot database.
+        columns = {column["name"] for column in inspect(engine).get_columns("claim_storage_records")}
+        with engine.begin() as connection:
+            if "owner_user_id" not in columns:
+                connection.exec_driver_sql("ALTER TABLE claim_storage_records ADD COLUMN owner_user_id VARCHAR(36)")
+            if "assigned_validator_id" not in columns:
+                connection.exec_driver_sql("ALTER TABLE claim_storage_records ADD COLUMN assigned_validator_id VARCHAR(36)")
     except Exception as exc:
         logger.warning("Could not connect to PostgreSQL database (%s). Persistence routes will require a running database.", exc)
 

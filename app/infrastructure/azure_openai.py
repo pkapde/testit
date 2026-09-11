@@ -172,6 +172,51 @@ def extract_document_fields(*, file_name: str, document_type: DocumentType, extr
         return None
 
 
+def generate_document_review_brief(
+    *,
+    file_name: str,
+    document_type: DocumentType,
+    classification_evidence: list[str],
+    extracted_fields: dict[str, str],
+) -> dict[str, object] | None:
+    """Create a concise, evidence-grounded brief for one document.
+
+    The response is deliberately document-scoped. It may describe what the
+    reviewer should compare or confirm, but cannot approve/reject a claim,
+    decide coverage, calculate a payout, or infer absent facts.
+    """
+    if not is_configured():
+        return None
+    prompt = (
+        "You are an insurance document-review assistant. Draft a concise reviewer aid for one submitted document. "
+        "Return JSON only: {\"recommendation\": string, \"summary\": string, \"review_points\": [string]}. "
+        "Recommendation must be one of SUPPORTS_CLAIM_REVIEW, CONFIRM_DOCUMENT_ALIGNMENT, or REQUEST_CLEARER_EVIDENCE. "
+        "Use only the supplied classification evidence and extracted fields. Focus on useful positive evidence and what to compare. "
+        "Do not mention missing extraction fields, approve/reject a claim, decide coverage/fraud, calculate money, or invent facts. "
+        f"File name: {file_name}. Document type: {document_type.value}. "
+        f"Classification evidence: {json.dumps(classification_evidence, ensure_ascii=False)}. "
+        f"Extracted fields: {json.dumps(extracted_fields, ensure_ascii=False)}"
+    )
+    try:
+        client = create_chat_client()
+        response = client.chat.completions.create(
+            model=configured_model_name(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1,
+            response_format={"type": "json_object"},
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        recommendation = str(payload.get("recommendation", "")).strip().upper()
+        summary = str(payload.get("summary", "")).strip()[:700]
+        review_points = [str(item).strip()[:300] for item in payload.get("review_points", []) if str(item).strip()][:3]
+        if recommendation not in {"SUPPORTS_CLAIM_REVIEW", "CONFIRM_DOCUMENT_ALIGNMENT", "REQUEST_CLEARER_EVIDENCE"} or not summary:
+            return None
+        return {"recommendation": recommendation, "summary": summary, "review_points": review_points}
+    except Exception as exc:
+        _log_provider_failure("document review brief", exc)
+        return None
+
+
 def assess_cross_document_consistency(extracted_fields: dict[str, dict[str, str]]) -> list[dict] | None:
     """Ask the LLM for semantic consistency findings based on extracted values only.
 

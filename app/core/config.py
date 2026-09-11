@@ -27,6 +27,12 @@ class Settings:
         if origin.strip()
     )
     database_url: str | None = os.getenv("DATABASE_URL")
+    # Local-account pilot authentication. Keep disabled while migrating existing
+    # demo users, then set AUTH_REQUIRED=true to enforce a signed local session.
+    auth_required: bool = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
+    local_auth_secret: str | None = os.getenv("LOCAL_AUTH_SECRET")
+    local_auth_token_minutes: int = int(os.getenv("LOCAL_AUTH_TOKEN_MINUTES", "480"))
+    local_auth_allow_validator_registration: bool = os.getenv("LOCAL_AUTH_ALLOW_VALIDATOR_REGISTRATION", "false").lower() == "true"
     azure_key_vault_url: str | None = os.getenv("AZURE_KEY_VAULT_URL")
     database_url_secret_name: str | None = os.getenv("DATABASE_URL_SECRET_NAME")
     azure_storage_connection_string: str | None = os.getenv("AZURE_STORAGE_CONNECTION_STRING")

@@ -176,10 +176,20 @@ class SettlementRecommendation(BaseModel):
     generation_method: str = "DETERMINISTIC"
 
 
+class DocumentReviewBrief(BaseModel):
+    """A safe per-document review aid; it never decides the claim."""
+
+    recommendation: str
+    summary: str
+    review_points: list[str] = Field(default_factory=list)
+    generation_method: str = "DETERMINISTIC"
+
+
 class ClaimTriageResult(BaseModel):
     validation: ClaimValidationResult
     extracted_fields: dict[str, dict[str, str]]
     extraction_method_by_document: dict[str, str] = Field(default_factory=dict)
+    document_review_briefs: dict[str, DocumentReviewBrief] = Field(default_factory=dict)
     field_validation_issues: list[FieldValidationIssue] = Field(default_factory=list)
     cross_document_issues: list[CrossDocumentIssue] = Field(default_factory=list)
     agentic_findings: list[AgenticFinding] = Field(default_factory=list)
