@@ -8,6 +8,15 @@ from app.services.local_auth import authenticate_local_user, create_access_token
 router = APIRouter(prefix="/auth", tags=["local authentication"])
 
 
+@router.get("/config")
+async def get_local_auth_config() -> dict[str, bool]:
+    """Expose only UI-safe pilot mode flags; never expose a signing secret."""
+    return {
+        "auth_required": settings.auth_required,
+        "validator_registration_allowed": settings.local_auth_allow_validator_registration,
+    }
+
+
 @router.post("/register", response_model=LocalSessionResponse, status_code=status.HTTP_201_CREATED)
 async def register_local_user(request: LocalRegistrationRequest) -> LocalSessionResponse:
     if request.role == LocalUserRole.VALIDATOR and not settings.local_auth_allow_validator_registration:
