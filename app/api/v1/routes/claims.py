@@ -54,7 +54,16 @@ def _run_stored_claim_workflow(claim_id: str) -> None:
         if not items:
             raise ValueError("No stored claim documents were available for analysis")
         workflow = run_claim_workflow(claim_id, items)
-        save_completed_workflow_report(claim_id, workflow["triage"])
+        result = workflow["triage"]
+        save_completed_workflow_report(claim_id, result)
+        # The portal resolves the consolidated review task when an adjuster
+        # clicks Approve or Reject.  Persist it after asynchronous processing
+        # just as the synchronous triage path does; otherwise a completed
+        # background workflow has no actionable task for the UI to resolve.
+        if settings.database_url:
+            from app.services.persistence import persist_triage_result
+
+            persist_triage_result(result, items)
     except Exception as exc:
         logger.exception("Background workflow failed for claim %s", claim_id)
         set_claim_processing_status(claim_id, "ANALYSIS_FAILED", str(exc))
@@ -211,10 +220,27 @@ async def get_claim_review_tasks(
     current_user: CurrentUser | None = Depends(get_optional_current_user),
 ):
     """List durable Claims Adjuster review tasks for a claim."""
-    from app.services.review import list_review_tasks
+    from app.services.review import create_claims_adjuster_review_task, list_review_tasks
     if current_user or settings.auth_required:
         require_validator(current_user)
-    return list_review_tasks(claim_id)
+    tasks = list_review_tasks(claim_id)
+    if tasks:
+        return tasks
+
+    # Claims completed before asynchronous task persistence was introduced can
+    # already have a complete workflow report but no review row.  Create the
+    # one durable task lazily so an adjuster can still complete that claim.
+    details = get_claim_details_json_from_postgres(claim_id)
+    workflow = (details or {}).get("workflow")
+    if isinstance(workflow, dict):
+        try:
+            from app.schemas.documents import ClaimTriageResult
+
+            create_claims_adjuster_review_task(ClaimTriageResult.model_validate(workflow))
+            tasks = list_review_tasks(claim_id)
+        except Exception:
+            logger.exception("Could not restore review task for claim %s", claim_id)
+    return tasks
 
 
 @router.post("/reviews/{task_id}/decision")
