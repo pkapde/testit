@@ -62,7 +62,11 @@ tests/                isolated service tests
 
 ## Orchestration and observability
 
-The triage route runs through LangGraph: `validate -> triage -> fraud -> coverage -> assessment -> settlement recommendation -> claims adjuster review`. Every outcome converges on the same authorised Claims Adjuster; `DOCUMENT_VERIFICATION`, `FRAUD_REVIEW`, and `CLAIMS_OFFICER` remain evidence/routing categories, not separate human roles. LangSmith tracing is disabled by default. Set `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` to emit a sanitized run trace; document bytes and extracted PII are never sent to the trace.
+The triage route runs through LangGraph: `validate -> triage -> fraud -> coverage -> assessment -> settlement recommendation -> claims adjuster review`. Every outcome converges on the same authorised Claims Adjuster; `DOCUMENT_VERIFICATION`, `FRAUD_REVIEW`, and `CLAIMS_OFFICER` remain evidence/routing categories, not separate human roles.
+
+### Optional self-hosted Phoenix tracing
+
+Phoenix is disabled by default and has no effect on claim handling when it is disabled or unavailable. To connect to an organisation-hosted Phoenix instance, install the updated dependencies, set `PHOENIX_ENABLED=true`, and set `PHOENIX_ENDPOINT` to the internal OTLP traces endpoint (for a local Phoenix server this is normally `http://127.0.0.1:6006/v1/traces`). ContractIQ exports only request/workflow timing, counts, statuses, redacted claim references, and Azure OpenAI operation names. It never exports document bytes, OCR text, prompts, model responses, claimant identifiers, credentials, or Blob URLs. Keep `PHOENIX_CAPTURE_CONTENT=false`, restrict the endpoint to the internal network, and set a retention policy in Phoenix before enabling it.
 
 ## Phase 2 extraction and cross-document triage
 
@@ -92,7 +96,7 @@ The decision changes the persisted claim state to `APPROVED`, `REJECTED`, `WAITI
 
 ## Production secrets and identity
 
-In production, deploy the app with an Azure Managed Identity. Grant it Blob Data Contributor for the claim-document container and Key Vault Secrets User for only the required vault. Configure `AZURE_KEY_VAULT_URL`, `AZURE_STORAGE_ACCOUNT_URL`, and named secret references such as `LANGSMITH_API_KEY_SECRET_NAME`. Local `.env` values remain supported for development only. Never commit a key or connection string.
+In production, deploy the app with an Azure Managed Identity. Grant it Blob Data Contributor for the claim-document container and Key Vault Secrets User for only the required vault. Configure `AZURE_KEY_VAULT_URL` and `AZURE_STORAGE_ACCOUNT_URL`. Local `.env` values remain supported for development only. Never commit a key or connection string.
 
 For production, configure authentication/authorization, a managed object store, malware scanning, Azure OCR/Document Intelligence, a database-backed audit trail, secret management, rate limits, observability, and CI/CD before deployment.
 

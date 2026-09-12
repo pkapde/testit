@@ -9,6 +9,14 @@ from app.schemas.documents import DocumentType
 
 logger = logging.getLogger(__name__)
 
+
+def _complete(client, operation: str, **kwargs):
+    """Execute a model call while exporting only safe timing metadata to Phoenix."""
+    from app.infrastructure.observability import llm_operation
+
+    with llm_operation(operation):
+        return client.chat.completions.create(**kwargs)
+
 EXTRACTION_FIELDS: dict[DocumentType, tuple[str, ...]] = {
     DocumentType.CLAIM_FORM: ("claim_number", "person_name", "vehicle_registration", "accident_date", "accident_details"),
     DocumentType.RC: ("person_name", "vehicle_registration", "chassis_number", "engine_number", "registration_date"),
@@ -106,7 +114,7 @@ def classify_document(*, file_name: str, content: bytes, extracted_text: str) ->
         data_url = f"data:{mime_type};base64,{base64.b64encode(content).decode('ascii')}"
         content_part.append({"type": "image_url", "image_url": {"url": data_url, "detail": "low"}})
     try:
-        response = client.chat.completions.create(
+        response = _complete(client, "document_classification",
             model=configured_model_name(),
             messages=[{"role": "user", "content": content_part}],
             temperature=1,
@@ -147,7 +155,7 @@ def extract_document_fields(*, file_name: str, document_type: DocumentType, extr
     )
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(
+        response = _complete(client, "field_extraction",
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=1,
@@ -199,7 +207,7 @@ def generate_document_review_brief(
     )
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(
+        response = _complete(client, "document_review_brief",
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=1,
@@ -234,7 +242,7 @@ def assess_cross_document_consistency(extracted_fields: dict[str, dict[str, str]
     )
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(
+        response = _complete(client, "cross_document_consistency",
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=1,
@@ -286,7 +294,7 @@ def assess_fraud_hypotheses(extracted_fields: dict[str, dict[str, str]], determi
     )
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(
+        response = _complete(client, "fraud_assessment",
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=1,
@@ -326,7 +334,7 @@ def explain_coverage(*, facts: dict[str, str], clauses: list[dict[str, str]]) ->
               f"Facts: {json.dumps(facts)} Clauses: {json.dumps(clauses)}")
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
+        response = _complete(client, "coverage_explanation", model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
         explanation = str(json.loads(response.choices[0].message.content or "{}").get("explanation", "")).strip()[:2000]
         return explanation or None
     except Exception as exc:
@@ -346,7 +354,7 @@ def answer_policy_enquiry(*, query: str, clauses: list[dict[str, str]]) -> str |
     )
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(
+        response = _complete(client, "policy_enquiry",
             model=configured_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=1,
@@ -369,7 +377,7 @@ def generate_claim_assessment(*, summary: str, evidence: list[str], checklist: l
               f"Summary: {summary} Evidence: {json.dumps(evidence)} Checklist: {json.dumps(checklist)}")
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
+        response = _complete(client, "claim_assessment", model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
         payload = json.loads(response.choices[0].message.content or "{}")
         text = str(payload.get("case_summary", "")).strip()[:2000]
         items = [str(item).strip()[:500] for item in payload.get("reviewer_checklist", []) if str(item).strip()][:10]
@@ -389,7 +397,7 @@ def explain_settlement_recommendation(*, preliminary_amount: str, basis: list[st
               f"Amount: INR {preliminary_amount}. Basis: {json.dumps(basis)}")
     try:
         client = create_chat_client()
-        response = client.chat.completions.create(model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
+        response = _complete(client, "settlement_explanation", model=configured_model_name(), messages=[{"role": "user", "content": prompt}], temperature=1, response_format={"type": "json_object"})
         text = str(json.loads(response.choices[0].message.content or "{}").get("explanation", "")).strip()[:1500]
         return text or None
     except Exception as exc:

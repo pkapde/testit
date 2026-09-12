@@ -45,10 +45,13 @@ class Settings:
     azure_openai_api_key_secret_name: str | None = os.getenv("AZURE_OPENAI_API_KEY_SECRET_NAME")
     azure_openai_deployment: str | None = os.getenv("AZURE_OPENAI_DEPLOYMENT")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
-    langsmith_tracing: bool = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
-    langsmith_api_key: str | None = os.getenv("LANGSMITH_API_KEY")
-    langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "contractiq")
-    langsmith_api_key_secret_name: str | None = os.getenv("LANGSMITH_API_KEY_SECRET_NAME")
+    # Phoenix is optional and disabled by default. It exports redacted operational
+    # metadata over OTLP to an internally hosted Phoenix instance.
+    phoenix_enabled: bool = os.getenv("PHOENIX_ENABLED", "false").lower() == "true"
+    phoenix_endpoint: str = os.getenv("PHOENIX_ENDPOINT", "http://127.0.0.1:6006/v1/traces")
+    phoenix_project_name: str = os.getenv("PHOENIX_PROJECT_NAME", "contractiq")
+    phoenix_service_name: str = os.getenv("PHOENIX_SERVICE_NAME", "contractiq-backend")
+    phoenix_capture_content: bool = os.getenv("PHOENIX_CAPTURE_CONTENT", "false").lower() == "true"
 
 
 settings = Settings()

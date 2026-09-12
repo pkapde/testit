@@ -13,8 +13,11 @@ configure_logging()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     from app.infrastructure.postgres import initialize_database
+    from app.infrastructure.observability import configure_phoenix, shutdown_phoenix
     initialize_database()
+    configure_phoenix(app)
     yield
+    shutdown_phoenix()
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", description="Motor claim document validator", lifespan=lifespan)
