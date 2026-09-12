@@ -32,12 +32,14 @@ def validate_policy_eligibility(state: ClaimWorkflowState) -> ClaimWorkflowState
     return {"triage": apply_policy_validation(state["triage"])}
 
 
-def route_after_policy_validation(state: ClaimWorkflowState) -> Literal["fraud_detection", "claims_adjuster_review"]:
-    """Do not run fraud/coverage/assessment for invalid or incomplete policy evidence."""
-    policy_validation = state["triage"].policy_validation
-    if policy_validation and policy_validation.status.value == "VALID":
-        return "fraud_detection"
-    return "claims_adjuster_review"
+def route_after_policy_validation(_: ClaimWorkflowState) -> Literal["fraud_detection"]:
+    """Run fraud evidence checks for every submission.
+
+    Policy eligibility remains a deterministic gate for coverage and settlement,
+    but the reviewer still benefits from the independent document-integrity and
+    fraud signals for a claim that needs a policy-document follow-up.
+    """
+    return "fraud_detection"
 
 
 def detect_fraud(state: ClaimWorkflowState) -> ClaimWorkflowState:
@@ -53,6 +55,14 @@ def assess_coverage(state: ClaimWorkflowState) -> ClaimWorkflowState:
     from app.services.coverage import apply_coverage_assessment
 
     return {"triage": apply_coverage_assessment(state["triage"])}
+
+
+def route_after_fraud(state: ClaimWorkflowState) -> Literal["coverage_assessment", "claim_assessment"]:
+    """Only run rules requiring policy dates when the policy gate is valid."""
+    policy_validation = state["triage"].policy_validation
+    if policy_validation and policy_validation.status.value == "VALID":
+        return "coverage_assessment"
+    return "claim_assessment"
 
 
 def prepare_claim_assessment(state: ClaimWorkflowState) -> ClaimWorkflowState:
@@ -93,7 +103,7 @@ def create_claim_workflow():
     graph.add_edge("validate", "triage")
     graph.add_edge("triage", "policy_eligibility")
     graph.add_conditional_edges("policy_eligibility", route_after_policy_validation)
-    graph.add_edge("fraud_detection", "coverage_assessment")
+    graph.add_conditional_edges("fraud_detection", route_after_fraud)
     graph.add_edge("coverage_assessment", "claim_assessment")
     graph.add_edge("claim_assessment", "settlement_recommendation")
     graph.add_conditional_edges("settlement_recommendation", route_human_stage)

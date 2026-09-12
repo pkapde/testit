@@ -80,6 +80,19 @@ def create_claims_adjuster_review_task(result: ClaimTriageResult) -> ReviewTaskR
         "settlement_recommendation": result.settlement_recommendation.model_dump(mode="json") if result.settlement_recommendation else None,
     }
     with session_scope() as session:
+        # Blob-storage claims created before PostgreSQL triage persistence may
+        # have a storage record and workflow report but no parent ClaimRecord.
+        # Create that lightweight parent first so the durable review task does
+        # not violate review_tasks.claim_id's foreign-key constraint.
+        claim = session.get(ClaimRecord, result.validation.claim_id)
+        if not claim:
+            session.add(
+                ClaimRecord(
+                    claim_id=result.validation.claim_id,
+                    status=result.validation.overall_status,
+                )
+            )
+            session.flush()
         if hasattr(session, "query"):
             existing = (
                 session.query(ReviewTaskRecord)

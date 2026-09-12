@@ -363,8 +363,9 @@ def generate_claim_assessment(*, summary: str, evidence: list[str], checklist: l
     """Draft a factual review summary and checklist; never a decision or payout."""
     if not is_configured():
         return None
-    prompt = ("You draft an insurance claims-officer review brief. Return JSON only: {\"case_summary\": string, \"reviewer_checklist\": [string]}. "
-              "Use only the supplied data. Do not approve/reject a claim, determine fraud, interpret new policy terms, or recommend a payout. "
+    prompt = ("You draft an insurance claims-officer evidence brief. Return JSON only: {\"case_summary\": string, \"reviewer_checklist\": [string]}. "
+              "Use only the supplied data. Emphasize concrete submitted evidence (policy, driving licence, registration certificate, photographs, estimates/invoices), matching identifiers, fraud signals, and the next practical verifier checks. "
+              "Do not mention extraction mechanics, missing entities, model failures, or internal routing states. Do not approve/reject a claim, determine fraud, interpret new policy terms, or recommend a payout. "
               f"Summary: {summary} Evidence: {json.dumps(evidence)} Checklist: {json.dumps(checklist)}")
     try:
         client = create_chat_client()

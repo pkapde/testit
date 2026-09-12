@@ -26,7 +26,7 @@ def test_policy_gate_accepts_policy_active_on_loss_date():
     assert result.policy_validation.policy_number == "POL/2023/00845672"
 
 
-def test_invalid_policy_stops_downstream_agents_and_routes_to_single_adjuster():
+def test_invalid_policy_retains_reviewer_brief_and_routes_to_single_adjuster():
     items = _documents(accident_date="02 November 2023", policy_period="01 January 2022 to 31 December 2022")
 
     workflow = run_claim_workflow("CLM-POLICY-2", items)
@@ -37,6 +37,11 @@ def test_invalid_policy_stops_downstream_agents_and_routes_to_single_adjuster():
     assert result.policy_validation.recommended_action == "REJECT_CLAIM"
     assert result.routing_queue == TriageQueue.CLAIMS_OFFICER
     assert result.coverage_decision == "NOT_COVERED"
-    assert result.assessment is None
-    assert result.settlement_recommendation is None
+    # Policy eligibility remains the deterministic rejection recommendation,
+    # while fraud and assessment agents still create a factual decision brief
+    # for the Claims Adjuster.
+    assert result.assessment is not None
+    assert "Claim CLM-POLICY-2" in result.assessment.case_summary
+    assert result.settlement_recommendation is not None
+    assert result.settlement_recommendation.status == "NOT_RECOMMENDED"
     assert workflow["human_stage"] == "CLAIMS_ADJUSTER_REVIEW"
