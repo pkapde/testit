@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import ssl
 from typing import Any, AsyncGenerator
+from urllib.parse import urlparse
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
@@ -29,13 +30,32 @@ def _azure_credentials(*, require_embeddings: bool) -> tuple[str, str]:
     api_key = get_secret(settings.azure_openai_api_key_secret_name, settings.azure_openai_api_key)
     if not settings.azure_openai_endpoint:
         raise RagConfigurationError("AZURE_OPENAI_ENDPOINT is required for the RAG service.")
+    endpoint = settings.azure_openai_endpoint.rstrip("/")
+    parsed_endpoint = urlparse(endpoint)
+    # AzureOpenAIEmbeddings and AzureChatOpenAI use Azure OpenAI's deployment
+    # API. A Foundry *project* endpoint has a different `/openai/v1` contract;
+    # accepting it here produces opaque Azure 400 responses during indexing.
+    if (
+        parsed_endpoint.hostname and parsed_endpoint.hostname.endswith(".services.ai.azure.com")
+    ) or "/api/projects/" in parsed_endpoint.path:
+        raise RagConfigurationError(
+            "AZURE_OPENAI_ENDPOINT must be an Azure OpenAI resource endpoint such as "
+            "https://<resource>.openai.azure.com/, not a Foundry project endpoint "
+            "containing services.ai.azure.com/api/projects."
+        )
+    if settings.azure_openai_api_version == "2023-05-15":
+        raise RagConfigurationError(
+            "AZURE_OPENAI_API_VERSION=2023-05-15 does not support text-embedding-3 models. "
+            "Use a current Azure OpenAI API version, for example 2024-02-01 or a later version "
+            "supported by your Azure OpenAI resource."
+        )
     if not api_key:
         raise RagConfigurationError("Azure OpenAI credentials are not configured. Set AZURE_OPENAI_API_KEY or its Key Vault secret name.")
     if not settings.azure_openai_deployment:
         raise RagConfigurationError("AZURE_OPENAI_DEPLOYMENT is required for RAG answers.")
     if require_embeddings and not settings.azure_openai_embedding_deployment:
         raise RagConfigurationError("AZURE_OPENAI_EMBEDDING_DEPLOYMENT is required to index policy documents.")
-    return settings.azure_openai_endpoint.rstrip("/"), api_key
+    return endpoint, api_key
 
 
 def is_azure_openai_configured() -> bool:
@@ -224,13 +244,14 @@ def build_vector_store(docs: list[Document], embeddings: Any):
         raise ValueError("The policy corpus produced no searchable chunks.")
     try:
         from langchain_community.vectorstores import FAISS
-        return FAISS.from_documents(docs, embeddings)
-    except Exception as exc:
-        logger.warning("FAISS unavailable (%s); using an in-memory vector store.", type(exc).__name__)
+    except ImportError:
+        logger.warning("FAISS is not installed; using an in-memory vector store.")
         from langchain_core.vectorstores import InMemoryVectorStore
         store = InMemoryVectorStore(embeddings)
         store.add_documents(docs)
         return store
+    # Do not mask embedding/authentication/API failures as a FAISS problem.
+    return FAISS.from_documents(docs, embeddings)
 
 
 def ingest_policy_data(file_path: str | Path | None = None) -> tuple[int, int]:
