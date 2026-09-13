@@ -34,7 +34,7 @@ def _azure_credentials(*, require_embeddings: bool) -> tuple[str, str]:
     parsed_endpoint = urlparse(endpoint)
     if not parsed_endpoint.scheme or not parsed_endpoint.hostname:
         raise RagConfigurationError("AZURE_OPENAI_ENDPOINT must be a valid HTTPS endpoint.")
-    if not _is_foundry_project_endpoint(endpoint) and settings.azure_openai_api_version == "2023-05-15":
+    if not _is_foundry_endpoint(endpoint) and settings.azure_openai_api_version == "2023-05-15":
         raise RagConfigurationError(
             "AZURE_OPENAI_API_VERSION=2023-05-15 does not support text-embedding-3 models. "
             "Use a current Azure OpenAI API version, for example 2024-02-01 or a later version "
@@ -49,19 +49,23 @@ def _azure_credentials(*, require_embeddings: bool) -> tuple[str, str]:
     return endpoint, api_key
 
 
-def _is_foundry_project_endpoint(endpoint: str) -> bool:
-    """Identify a Microsoft Foundry project endpoint, not an Azure OpenAI resource endpoint."""
+def _is_foundry_endpoint(endpoint: str) -> bool:
+    """Identify either the Microsoft Foundry project or account-level endpoint."""
     parsed = urlparse(endpoint)
-    return bool(
-        parsed.hostname
-        and parsed.hostname.endswith(".services.ai.azure.com")
-        and "/api/projects/" in parsed.path
-    )
+    return bool(parsed.hostname and parsed.hostname.endswith(".services.ai.azure.com"))
 
 
-def _foundry_openai_base_url(project_endpoint: str) -> str:
-    """Return the OpenAI-compatible v1 base URL required by Foundry project models."""
-    return f"{project_endpoint.rstrip('/')}/openai/v1/"
+def _foundry_openai_base_url(foundry_endpoint: str) -> str:
+    """Return Foundry's account-level OpenAI-compatible v1 endpoint.
+
+    Foundry project endpoints (`/api/projects/<project>`) are valid for
+    project/agent operations but intentionally do not route embedding calls.
+    Embeddings must use the Foundry account endpoint instead.
+    """
+    parsed = urlparse(foundry_endpoint)
+    if not parsed.scheme or not parsed.netloc:
+        raise RagConfigurationError("AZURE_OPENAI_ENDPOINT must be a valid Microsoft Foundry endpoint.")
+    return f"{parsed.scheme}://{parsed.netloc}/openai/v1/"
 
 
 def is_azure_openai_configured() -> bool:
@@ -102,10 +106,10 @@ def get_azure_embeddings():
         raise RagConfigurationError("RAG dependencies are missing. Run `py -m pip install -r requirements.txt`.") from exc
 
     endpoint, api_key = _azure_credentials(require_embeddings=True)
-    if _is_foundry_project_endpoint(endpoint):
-        # Foundry project endpoints expose the OpenAI-compatible `/openai/v1`
-        # API. AzureOpenAIEmbeddings would instead generate the legacy
-        # `/openai/deployments/...` path, resulting in an Azure 400 response.
+    if _is_foundry_endpoint(endpoint):
+        # Foundry project endpoints do not route embeddings. Use the account
+        # endpoint's OpenAI-compatible API instead of Azure's legacy
+        # `/openai/deployments/...` request path.
         from langchain_openai import OpenAIEmbeddings
         return OpenAIEmbeddings(
             model=settings.azure_openai_embedding_deployment,
@@ -130,7 +134,7 @@ def get_azure_llm():
         raise RagConfigurationError("RAG dependencies are missing. Run `py -m pip install -r requirements.txt`.") from exc
 
     endpoint, api_key = _azure_credentials(require_embeddings=False)
-    if _is_foundry_project_endpoint(endpoint):
+    if _is_foundry_endpoint(endpoint):
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             model=settings.azure_openai_deployment,
