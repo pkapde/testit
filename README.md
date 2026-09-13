@@ -68,6 +68,8 @@ The triage route runs through LangGraph: `validate -> triage -> fraud -> coverag
 
 The RAG service answers policy questions only from the configured JSON corpus. Use `POST /api/v1/claims/rag/ingest` to index it, then `POST /api/v1/claims/askClaimDetails` with `{"query": "..."}` to stream a grounded response. The branch includes a synthetic starter corpus at `Data/Rag/policy_details.json`; production must set `RAG_POLICY_DATA_PATH` to an approved internal policy-data export.
 
+`AZURE_OPENAI_ENDPOINT` supports either an Azure OpenAI resource endpoint or a Microsoft Foundry project endpoint (`https://<resource>.services.ai.azure.com/api/projects/<project>`). For a Foundry project endpoint, the service automatically uses the required OpenAI-compatible `/openai/v1` client path and does not send the Azure OpenAI `api-version` parameter. Configure the chat and embedding values with the model deployment names exposed to that Foundry project.
+
 Set the exact Azure deployment names rather than model family names:
 
 ```env

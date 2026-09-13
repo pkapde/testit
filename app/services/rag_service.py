@@ -32,18 +32,9 @@ def _azure_credentials(*, require_embeddings: bool) -> tuple[str, str]:
         raise RagConfigurationError("AZURE_OPENAI_ENDPOINT is required for the RAG service.")
     endpoint = settings.azure_openai_endpoint.rstrip("/")
     parsed_endpoint = urlparse(endpoint)
-    # AzureOpenAIEmbeddings and AzureChatOpenAI use Azure OpenAI's deployment
-    # API. A Foundry *project* endpoint has a different `/openai/v1` contract;
-    # accepting it here produces opaque Azure 400 responses during indexing.
-    if (
-        parsed_endpoint.hostname and parsed_endpoint.hostname.endswith(".services.ai.azure.com")
-    ) or "/api/projects/" in parsed_endpoint.path:
-        raise RagConfigurationError(
-            "AZURE_OPENAI_ENDPOINT must be an Azure OpenAI resource endpoint such as "
-            "https://<resource>.openai.azure.com/, not a Foundry project endpoint "
-            "containing services.ai.azure.com/api/projects."
-        )
-    if settings.azure_openai_api_version == "2023-05-15":
+    if not parsed_endpoint.scheme or not parsed_endpoint.hostname:
+        raise RagConfigurationError("AZURE_OPENAI_ENDPOINT must be a valid HTTPS endpoint.")
+    if not _is_foundry_project_endpoint(endpoint) and settings.azure_openai_api_version == "2023-05-15":
         raise RagConfigurationError(
             "AZURE_OPENAI_API_VERSION=2023-05-15 does not support text-embedding-3 models. "
             "Use a current Azure OpenAI API version, for example 2024-02-01 or a later version "
@@ -56,6 +47,21 @@ def _azure_credentials(*, require_embeddings: bool) -> tuple[str, str]:
     if require_embeddings and not settings.azure_openai_embedding_deployment:
         raise RagConfigurationError("AZURE_OPENAI_EMBEDDING_DEPLOYMENT is required to index policy documents.")
     return endpoint, api_key
+
+
+def _is_foundry_project_endpoint(endpoint: str) -> bool:
+    """Identify a Microsoft Foundry project endpoint, not an Azure OpenAI resource endpoint."""
+    parsed = urlparse(endpoint)
+    return bool(
+        parsed.hostname
+        and parsed.hostname.endswith(".services.ai.azure.com")
+        and "/api/projects/" in parsed.path
+    )
+
+
+def _foundry_openai_base_url(project_endpoint: str) -> str:
+    """Return the OpenAI-compatible v1 base URL required by Foundry project models."""
+    return f"{project_endpoint.rstrip('/')}/openai/v1/"
 
 
 def is_azure_openai_configured() -> bool:
@@ -89,13 +95,24 @@ def _trusted_http_client():
 
 
 def get_azure_embeddings():
-    """Build the Azure embeddings client using explicit, validated configuration."""
+    """Build an Azure OpenAI or Foundry embeddings client from validated configuration."""
     try:
         from langchain_openai import AzureOpenAIEmbeddings
     except ImportError as exc:
         raise RagConfigurationError("RAG dependencies are missing. Run `py -m pip install -r requirements.txt`.") from exc
 
     endpoint, api_key = _azure_credentials(require_embeddings=True)
+    if _is_foundry_project_endpoint(endpoint):
+        # Foundry project endpoints expose the OpenAI-compatible `/openai/v1`
+        # API. AzureOpenAIEmbeddings would instead generate the legacy
+        # `/openai/deployments/...` path, resulting in an Azure 400 response.
+        from langchain_openai import OpenAIEmbeddings
+        return OpenAIEmbeddings(
+            model=settings.azure_openai_embedding_deployment,
+            base_url=_foundry_openai_base_url(endpoint),
+            api_key=api_key,
+            http_client=_trusted_http_client(),
+        )
     return AzureOpenAIEmbeddings(
         azure_deployment=settings.azure_openai_embedding_deployment,
         azure_endpoint=endpoint,
@@ -106,13 +123,23 @@ def get_azure_embeddings():
 
 
 def get_azure_llm():
-    """Build the Azure chat client using verified TLS; it never falls back to mock credentials."""
+    """Build an Azure OpenAI or Foundry chat client using verified TLS."""
     try:
         from langchain_openai import AzureChatOpenAI
     except ImportError as exc:
         raise RagConfigurationError("RAG dependencies are missing. Run `py -m pip install -r requirements.txt`.") from exc
 
     endpoint, api_key = _azure_credentials(require_embeddings=False)
+    if _is_foundry_project_endpoint(endpoint):
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=settings.azure_openai_deployment,
+            base_url=_foundry_openai_base_url(endpoint),
+            api_key=api_key,
+            temperature=0.1,
+            streaming=True,
+            http_client=_trusted_http_client(),
+        )
     return AzureChatOpenAI(
         azure_deployment=settings.azure_openai_deployment,
         azure_endpoint=endpoint,
