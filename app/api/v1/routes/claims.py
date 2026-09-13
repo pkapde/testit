@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from app.schemas.claim_storage import ClaimStorageResponse
@@ -17,7 +19,11 @@ from app.services.validator import IncomingFile, validate_claim
 from app.services.workflow import run_claim_workflow
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/claims", tags=["claims"])
+# This router is included before the generic claim routes so `/rag/ingest` is
+# never captured as `/{claim_id}/ingest` with `claim_id="rag"`.
+rag_router = APIRouter(prefix="/claims/rag", tags=["rag"])
 
 
 @router.post(
@@ -263,20 +269,10 @@ def get_claim_details(claim_id: str) -> dict:
     return details
 
 
-@router.post(
+@rag_router.post(
     "/ingest",
     response_model=IngestResponse,
-    summary="Ingest policy details JSON, apply semantic chunking, and index into vector store",
-    description=(
-        "Loads policy details from Data/Rag/Policu_details.json (or configured path), "
-        "applies LangChain's SemanticChunker using Azure OpenAI text_embedding_small model, "
-        "and indexes the chunks into a vector store."
-    ),
-)
-@router.post(
-    "/rag/ingest",
-    response_model=IngestResponse,
-    include_in_schema=False,
+    summary="Ingest policy details JSON and index it for grounded RAG answers",
 )
 async def ingest_policies() -> IngestResponse:
     try:
@@ -293,6 +289,11 @@ async def ingest_policies() -> IngestResponse:
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
     except Exception as exc:
@@ -317,12 +318,27 @@ async def ask_claim_details(request: AskClaimRequest):
             detail="Query string cannot be empty.",
         )
 
+    try:
+        # Initialise and validate the index before streaming headers are sent,
+        # so setup, configuration, and corporate TLS errors return a real API
+        # error rather than a misleading HTTP 200 response body.
+        from app.services.rag_service import get_vector_store
+        get_vector_store()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("RAG index preparation failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="RAG policy index could not be prepared. Check the server logs.") from exc
+
     async def event_generator():
         try:
             async for token in stream_claim_details(request.query, k=request.k):
                 yield token
         except Exception as exc:
-            yield f"\n[Error generating response: {str(exc)}]"
+            logger.exception("RAG answer generation failed")
+            yield "\n[The policy answer could not be generated. Please retry or contact the claims support team.]"
 
     return StreamingResponse(
         event_generator(),

@@ -15,7 +15,7 @@ from app.services.rag_service import (
 def test_resolve_policy_data_file():
     path = resolve_policy_data_file()
     assert path.is_file()
-    assert "Polic" in path.name
+    assert path.name.lower() == "policy_details.json"
 
 
 def test_load_policy_records():
@@ -99,7 +99,7 @@ def test_ingest_api_endpoint(monkeypatch):
     monkeypatch.setattr("app.services.rag_service.get_azure_embeddings", lambda: fake_embeddings)
 
     with TestClient(app) as client:
-        response = client.post("/api/v1/claims/ingest")
+        response = client.post("/api/v1/claims/rag/ingest")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"

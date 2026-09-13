@@ -38,9 +38,13 @@ class Settings:
     azure_openai_api_key: str | None = os.getenv("AZURE_OPENAI_API_KEY")
     azure_openai_api_key_secret_name: str | None = os.getenv("AZURE_OPENAI_API_KEY_SECRET_NAME")
     azure_openai_deployment: str | None = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    azure_openai_embedding_deployment: str = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text_embedding_small")
+    azure_openai_embedding_deployment: str | None = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
-    rag_policy_data_path: str = os.getenv("RAG_POLICY_DATA_PATH", "Data/Rag/Policu_details.json")
+    # Corporate TLS: use the Windows/macOS/Linux system certificate store by
+    # default. Alternatively point to an IT-provided PEM CA bundle.
+    azure_openai_ca_bundle: str | None = os.getenv("AZURE_OPENAI_CA_BUNDLE")
+    azure_openai_use_system_certificates: bool = os.getenv("AZURE_OPENAI_USE_SYSTEM_CERTIFICATES", "true").lower() == "true"
+    rag_policy_data_path: str = os.getenv("RAG_POLICY_DATA_PATH", "Data/Rag/policy_details.json")
     langsmith_tracing: bool = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
     langsmith_api_key: str | None = os.getenv("LANGSMITH_API_KEY")
     langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "contractiq")

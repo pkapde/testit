@@ -64,6 +64,22 @@ tests/                isolated service tests
 
 The triage route runs through LangGraph: `validate -> triage -> fraud -> coverage -> assessment -> settlement recommendation -> claims adjuster review`. Every outcome converges on the same authorised Claims Adjuster; `DOCUMENT_VERIFICATION`, `FRAUD_REVIEW`, and `CLAIMS_OFFICER` remain evidence/routing categories, not separate human roles. LangSmith tracing is disabled by default. Set `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` to emit a sanitized run trace; document bytes and extracted PII are never sent to the trace.
 
+## Policy RAG setup
+
+The RAG service answers policy questions only from the configured JSON corpus. Use `POST /api/v1/claims/rag/ingest` to index it, then `POST /api/v1/claims/askClaimDetails` with `{"query": "..."}` to stream a grounded response. The branch includes a synthetic starter corpus at `Data/Rag/policy_details.json`; production must set `RAG_POLICY_DATA_PATH` to an approved internal policy-data export.
+
+Set the exact Azure deployment names rather than model family names:
+
+```env
+AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com
+AZURE_OPENAI_API_KEY=<from-key-vault-or-local-development-secret>
+AZURE_OPENAI_DEPLOYMENT=<chat-deployment-name>
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=<embedding-deployment-name>
+AZURE_OPENAI_API_VERSION=<version-supported-by-your-resource>
+```
+
+On an organisation network with TLS inspection, request the corporate root CA from IT. The service uses the operating-system trust store by default through `truststore`; alternatively set `AZURE_OPENAI_CA_BUNDLE` to the approved PEM chain. It never disables certificate validation. An SSL `CERTIFICATE_VERIFY_FAILED` error is a certificate-trust issue before Azure receives the request, not an API-version error.
+
 ## Phase 2 extraction and cross-document triage
 
 `POST /api/v1/claims/{claim_id}/triage` extracts core structured fields from a valid package: claim and FIR numbers, vehicle registration, owner/claimant name, RC chassis and engine numbers, policy period and IDV, driving-licence validity, and garage estimate/invoice details.

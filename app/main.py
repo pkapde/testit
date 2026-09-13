@@ -68,7 +68,7 @@ def test_page() -> str:
     <pre id=classifyResult>Classification result will appear here.</pre></section>
     <hr>
     <section><h2>LangChain RAG Pipeline (Policy Knowledge Base)</h2>
-    <p>1. Ingest <code>Data/Rag/Policu_details.json</code> with Semantic Chunking:</p>
+    <p>1. Ingest the configured policy JSON corpus into the RAG index:</p>
     <button id=btnIngest type=button>Ingest & Index Policies</button>
     <pre id=ingestResult>Click the button above to ingest policy records.</pre>
     
@@ -99,7 +99,7 @@ def test_page() -> str:
     document.querySelector('#btnIngest').addEventListener('click',async()=>{
         ingestResult.textContent='Ingesting and semantically chunking policies...';
         try{
-            const res=await fetch('/api/v1/claims/ingest',{method:'POST'});
+            const res=await fetch('/api/v1/claims/rag/ingest',{method:'POST'});
             ingestResult.textContent=JSON.stringify(await res.json(),null,2);
         }catch(e){
             ingestResult.textContent='Error: '+e;

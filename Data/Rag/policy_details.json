@@ -1,0 +1,29 @@
+[
+  {
+    "policy_number": "POL-DEMO-001",
+    "policy_holder": {"name": "Rohan Sharma"},
+    "vehicle_details": {"registration_number": "HR26AB1234", "make": "Maruti Suzuki", "model": "Swift"},
+    "policy_terms": {"policy_type": "Comprehensive", "policy_start_date": "2026-01-01", "policy_end_date": "2026-12-31", "insured_declared_value_inr": 650000},
+    "coverage_and_add_ons": {"zero_depreciation_cover": true, "engine_gearbox_protection": true, "roadside_assistance": true},
+    "deductibles": {"compulsory_deductible_inr": 1000},
+    "claim_rules_and_conditions": {"intimation_deadline_hours": 48, "exclusions": ["Driving under influence", "Unauthorised commercial use"]}
+  },
+  {
+    "policy_number": "POL-DEMO-002",
+    "policy_holder": {"name": "Asha Verma"},
+    "vehicle_details": {"registration_number": "DL01CD5678", "make": "Hyundai", "model": "i20"},
+    "policy_terms": {"policy_type": "Own Damage", "policy_start_date": "2026-04-01", "policy_end_date": "2027-03-31", "insured_declared_value_inr": 720000},
+    "coverage_and_add_ons": {"zero_depreciation_cover": false, "engine_gearbox_protection": false},
+    "deductibles": {"compulsory_deductible_inr": 1000},
+    "claim_rules_and_conditions": {"intimation_deadline_hours": 48, "exclusions": ["Consequential loss", "Wear and tear"]}
+  },
+  {
+    "policy_number": "POL-DEMO-003",
+    "policy_holder": {"name": "Meera Iyer"},
+    "vehicle_details": {"registration_number": "KA05EF9012", "make": "Tata", "model": "Nexon"},
+    "policy_terms": {"policy_type": "Comprehensive", "policy_start_date": "2026-06-01", "policy_end_date": "2027-05-31", "insured_declared_value_inr": 980000},
+    "coverage_and_add_ons": {"zero_depreciation_cover": true, "engine_gearbox_protection": false, "consumables_cover": true},
+    "deductibles": {"compulsory_deductible_inr": 1500},
+    "claim_rules_and_conditions": {"intimation_deadline_hours": 24, "exclusions": ["Racing", "Intentional damage"]}
+  }
+]

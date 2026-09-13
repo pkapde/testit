@@ -18,4 +18,7 @@ langchain-openai>=0.2.0,<1.0
 langchain-community>=0.3.0,<1.0
 langchain-experimental>=0.3.0,<1.0
 faiss-cpu>=1.8.0,<2.0
+# Lets Python trust an organisation-managed Windows/macOS/Linux CA store.
+# It never disables TLS verification.
+truststore>=0.10,<1.0
 pytest>=8.0,<9.0
