@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from hashlib import sha256
 import logging
-from typing import Iterator
+from typing import Any, Iterator
 
 from app.core.config import settings
 from app.schemas.documents import ClaimTriageResult
@@ -87,19 +87,55 @@ def trace_triage(result: ClaimTriageResult) -> str | None:
 
 
 @contextmanager
-def llm_operation(operation: str) -> Iterator[None]:
-    """Record timing/outcome for an LLM call, never its prompts, responses, or files."""
+def llm_operation(operation: str) -> Iterator[Any | None]:
+    """Create an OpenInference LLM span without exporting claim content."""
     if not _configured:
-        yield
+        yield None
         return
+
     try:
         from opentelemetry import trace
         tracer = trace.get_tracer("contractiq.llm")
-        with tracer.start_as_current_span("azure_openai.operation") as span:
-            span.set_attribute("llm.operation", operation)
-            span.set_attribute("llm.system", "azure_openai")
-            span.set_attribute("llm.model_deployment", settings.azure_openai_deployment or "unconfigured")
-            yield
-    except Exception:
-        # Do not change the provider behaviour if tracing itself has an issue.
-        yield
+        span_context = tracer.start_as_current_span("azure_openai.operation")
+    except Exception as exc:
+        # Observability is optional; a tracing setup error must not block a claim.
+        logger.warning("Phoenix LLM span could not be started: %s", type(exc).__name__)
+        yield None
+        return
+
+    # Do not catch exceptions raised by the model call inside this context. They
+    # must retain their normal error behaviour instead of becoming tracing errors.
+    with span_context as span:
+        span.set_attribute("openinference.span.kind", "LLM")
+        span.set_attribute("llm.operation", operation)
+        span.set_attribute("llm.system", "openai")
+        span.set_attribute("llm.provider", "azure")
+        span.set_attribute("llm.model_name", settings.azure_openai_deployment or "unconfigured")
+        yield span
+
+
+def record_llm_response(span: Any | None, response: Any) -> None:
+    """Attach safe model and token metadata from a completed Azure response."""
+    if span is None:
+        return
+
+    try:
+        model_name = getattr(response, "model", None) or settings.azure_openai_deployment
+        if model_name:
+            span.set_attribute("llm.model_name", str(model_name))
+
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+
+        token_attributes = {
+            "llm.token_count.prompt": getattr(usage, "prompt_tokens", None),
+            "llm.token_count.completion": getattr(usage, "completion_tokens", None),
+            "llm.token_count.total": getattr(usage, "total_tokens", None),
+        }
+        for name, value in token_attributes.items():
+            if value is not None:
+                span.set_attribute(name, int(value))
+    except Exception as exc:
+        # Never let incomplete SDK metadata prevent an otherwise successful call.
+        logger.warning("Phoenix LLM response metadata could not be recorded: %s", type(exc).__name__)

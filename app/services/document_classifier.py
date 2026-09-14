@@ -8,7 +8,7 @@ from typing import NamedTuple
 from pypdf import PdfReader
 
 from app.core.config import settings
-from app.infrastructure.azure_openai import configured_model_name, create_chat_client, is_configured
+from app.infrastructure.azure_openai import _complete, configured_model_name, create_chat_client, is_configured
 from app.schemas.classification import (
     AccidentPhotoCoverage,
     ClassificationCategory,
@@ -264,7 +264,9 @@ Note: `accident_photo_coverage` should be included if requested category is `acc
                         "text": f"File '{file.filename}' [binary file]",
                     })
 
-        response = client.chat.completions.create(
+        response = _complete(
+            client,
+            "claim_document_assessment",
             model=configured_model_name(),
             messages=[{"role": "user", "content": content_parts}],
             temperature=0.1,

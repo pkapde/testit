@@ -12,10 +12,12 @@ logger = logging.getLogger(__name__)
 
 def _complete(client, operation: str, **kwargs):
     """Execute a model call while exporting only safe timing metadata to Phoenix."""
-    from app.infrastructure.observability import llm_operation
+    from app.infrastructure.observability import llm_operation, record_llm_response
 
-    with llm_operation(operation):
-        return client.chat.completions.create(**kwargs)
+    with llm_operation(operation) as span:
+        response = client.chat.completions.create(**kwargs)
+        record_llm_response(span, response)
+        return response
 
 EXTRACTION_FIELDS: dict[DocumentType, tuple[str, ...]] = {
     DocumentType.CLAIM_FORM: ("claim_number", "person_name", "vehicle_registration", "accident_date", "accident_details"),
