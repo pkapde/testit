@@ -13,6 +13,7 @@ NEXT_CLAIM_STATUS: dict[ReviewAction, str] = {
     ReviewAction.VERIFIED: "READY_FOR_EXTRACTION",
     ReviewAction.APPROVE_FOR_SETTLEMENT: "READY_FOR_SETTLEMENT_REVIEW",
     ReviewAction.OVERRIDE: "READY_FOR_EXTRACTION",
+    ReviewAction.REQUEST_MORE_INFO: "WAITING_FOR_INFORMATION",
     ReviewAction.REQUEST_REUPLOAD: "WAITING_FOR_UPLOAD",
     ReviewAction.REJECT_DOCUMENT: "DOCUMENT_REJECTED",
     ReviewAction.ESCALATE_FRAUD: "FRAUD_REVIEW",
@@ -138,6 +139,7 @@ def resolve_review_task(
     comment: str,
     *,
     deductible: float | None = None,
+    requested_documents: list[str] | None = None,
 ) -> ReviewTaskResponse:
     """Record a human decision and make the claim eligible for its next controlled stage."""
     resolved_at = datetime.now(timezone.utc)
@@ -176,13 +178,27 @@ def resolve_review_task(
             if action == ReviewAction.APPROVE_CLAIM:
                 human_review["deductible"] = f"{Decimal(str(deductible or 0)):.2f}"
                 human_review["approved_amount"] = approved_amount
+            if action in {ReviewAction.REQUEST_MORE_INFO, ReviewAction.REQUEST_REUPLOAD}:
+                human_review["requested_documents"] = list(requested_documents or [])
+                human_review["information_request"] = {
+                    "message": comment,
+                    "requested_documents": list(requested_documents or []),
+                    "claimant_next_step": "Upload the requested evidence so the validator can resume the review.",
+                }
             stored_payload["human_review"] = human_review
             storage_claim.claim_folder_json = stored_payload
             task.evidence = {**(task.evidence or {}), "human_review": human_review}
         session.add(AuditEvent(
             claim_id=task.claim_id,
             event_type="DOCUMENT_REVIEW_TASK_RESOLVED",
-            payload={"task_id": task.task_id, "action": action.value, "reviewer_id": reviewer_id, "comment": comment, "resumed_to": resumed_to},
+            payload={
+                "task_id": task.task_id,
+                "action": action.value,
+                "reviewer_id": reviewer_id,
+                "comment": comment,
+                "requested_documents": list(requested_documents or []),
+                "resumed_to": resumed_to,
+            },
         ))
         session.flush()
         response = _to_response(task)
@@ -199,5 +215,6 @@ def resolve_review_task(
         resolved_at=resolved_at.isoformat(),
         deductible=(f"{Decimal(str(deductible or 0)):.2f}" if action == ReviewAction.APPROVE_CLAIM else None),
         approved_amount=response.approved_amount,
+        requested_documents=list(requested_documents or []),
     )
     return response

@@ -64,3 +64,55 @@ def test_adjuster_decision_updates_claim_storage_record_for_portals():
         assert stored.claim_folder_json["human_review"]["decision"] == "APPROVE_CLAIM"
         assert stored.claim_folder_json["human_review"]["approved_amount"] == "39620.00"
     save_local.assert_called_once()
+
+
+def test_information_request_is_visible_to_claimant_and_validator():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine, expire_on_commit=False)
+
+    with TestSession() as session:
+        session.add(ClaimRecord(claim_id="CLM-INFO-1", status="COMPLETE"))
+        session.add(
+            ClaimStorageRecord(
+                claim_id="CLM-INFO-1",
+                status="PENDING_VERIFICATION",
+                claim_folder_json={"claim_id": "CLM-INFO-1", "status": "PENDING_VERIFICATION"},
+            )
+        )
+        session.add(
+            ReviewTaskRecord(
+                task_id="task-info-1",
+                claim_id="CLM-INFO-1",
+                stage="CLAIMS_ADJUSTER_REVIEW",
+                status="OPEN",
+                reason="More evidence required.",
+                evidence={},
+            )
+        )
+        session.commit()
+
+    with patch("app.infrastructure.postgres._session_factory", return_value=TestSession), patch(
+        "app.services.claim_storage.save_claim_review_decision_to_local_metadata"
+    ) as save_local:
+        response = resolve_review_task(
+            "task-info-1",
+            ReviewAction.REQUEST_MORE_INFO,
+            "adjuster-1",
+            "Please upload a clearer right-side damage photograph and the repair invoice.",
+            requested_documents=["accident_photos", "repair_invoice"],
+        )
+
+    assert response.resumed_to == "WAITING_FOR_INFORMATION"
+    with TestSession() as session:
+        assert session.get(ClaimRecord, "CLM-INFO-1").status == "WAITING_FOR_INFORMATION"
+        stored = session.get(ClaimStorageRecord, "CLM-INFO-1")
+        assert stored.status == "WAITING_FOR_INFORMATION"
+        request = stored.claim_folder_json["human_review"]["information_request"]
+        assert request["requested_documents"] == ["accident_photos", "repair_invoice"]
+        assert "right-side damage" in request["message"]
+    save_local.assert_called_once()

@@ -262,6 +262,7 @@ async def submit_review_decision(
             validator.user_id if validator else request.reviewer_id,
             request.comment,
             deductible=request.deductible,
+            requested_documents=[document.value for document in request.requested_documents],
         )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc

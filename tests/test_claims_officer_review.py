@@ -7,6 +7,8 @@ def test_single_claims_adjuster_task_is_created_for_any_automated_route(monkeypa
     # Persistence is covered separately; this verifies the one-reviewer stage.
     captured = {}
     class FakeSession:
+        def get(self, *_):
+            return None
         def add(self, value):
             captured.setdefault("items", []).append(value)
         def flush(self):
@@ -27,3 +29,9 @@ def test_single_claims_adjuster_task_is_created_for_any_automated_route(monkeypa
 def test_claims_adjuster_can_make_final_claim_decision():
     assert next_claim_status(ReviewAction.APPROVE_CLAIM) == "APPROVED"
     assert next_claim_status(ReviewAction.REJECT_CLAIM) == "REJECTED"
+
+
+def test_claims_adjuster_can_request_missing_information():
+    assert next_claim_status(ReviewAction.REQUEST_MORE_INFO) == "WAITING_FOR_INFORMATION"
+    # Existing UI/API callers remain valid while they migrate to the clearer action.
+    assert next_claim_status(ReviewAction.REQUEST_REUPLOAD) == "WAITING_FOR_UPLOAD"

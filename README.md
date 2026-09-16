@@ -90,9 +90,9 @@ When Azure OpenAI is configured, the Cross-Document Validation Agent also makes 
 The durable production route (`POST /api/v1/claims/{claim_id}/ingest`) creates one PostgreSQL `review_tasks` record after the automated workflow completes. The Claims Adjuster receives the routing reason, validation evidence, fraud and coverage findings, assessment, settlement recommendation, decision, timestamp, and audit events.
 
 - `GET /api/v1/claims/{claim_id}/reviews` lists tasks for a claim.
-- `POST /api/v1/claims/reviews/{task_id}/decision` records `APPROVE_CLAIM`, `REJECT_CLAIM`, `REQUEST_REUPLOAD`, `REJECT_DOCUMENT`, `ESCALATE_FRAUD`, or `OVERRIDE`.
+- `POST /api/v1/claims/reviews/{task_id}/decision` records `APPROVE_CLAIM`, `REJECT_CLAIM`, `REQUEST_MORE_INFO`, `REQUEST_REUPLOAD`, `REJECT_DOCUMENT`, `ESCALATE_FRAUD`, or `OVERRIDE`. A more-information request stores the validator's message and optional `requested_documents` list for the claimant portal.
 
-The decision changes the persisted claim state to `APPROVED`, `REJECTED`, `WAITING_FOR_UPLOAD`, `DOCUMENT_REJECTED`, or `FRAUD_REVIEW`. In production, authentication must supply the reviewer identity; the current local API accepts `reviewer_id` only to exercise the workflow.
+The decision changes the persisted claim state to `APPROVED`, `REJECTED`, `WAITING_FOR_INFORMATION`, `WAITING_FOR_UPLOAD`, `DOCUMENT_REJECTED`, or `FRAUD_REVIEW`. In production, authentication must supply the reviewer identity; the current local API accepts `reviewer_id` only to exercise the workflow.
 
 ## Production secrets and identity
 

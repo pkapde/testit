@@ -61,6 +61,7 @@ class ReviewAction(str, Enum):
     REJECT_CLAIM = "REJECT_CLAIM"
     VERIFIED = "VERIFIED"
     APPROVE_FOR_SETTLEMENT = "APPROVE_FOR_SETTLEMENT"
+    REQUEST_MORE_INFO = "REQUEST_MORE_INFO"
     REQUEST_REUPLOAD = "REQUEST_REUPLOAD"
     REJECT_DOCUMENT = "REJECT_DOCUMENT"
     ESCALATE_FRAUD = "ESCALATE_FRAUD"
@@ -72,6 +73,13 @@ class ReviewDecisionRequest(BaseModel):
     reviewer_id: str = Field(min_length=1, max_length=100)
     comment: str = Field(min_length=3, max_length=2000)
     deductible: float | None = Field(default=None, ge=0, description="Human-confirmed deductible or adjustment amount in INR.")
+    requested_documents: list[DocumentType] = Field(
+        default_factory=list,
+        description=(
+            "Evidence the claimant must provide before review can resume. "
+            "Use with REQUEST_MORE_INFO or REQUEST_REUPLOAD."
+        ),
+    )
 
 
 class ReviewTaskResponse(BaseModel):
