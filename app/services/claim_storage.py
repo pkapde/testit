@@ -95,15 +95,26 @@ def get_all_claims_json_from_postgres(owner_user_id: str | None = None) -> list[
     results: list[dict] = []
     try:
         from sqlalchemy import select
-        from app.infrastructure.postgres import ClaimStorageRecord, session_scope
+        from app.infrastructure.postgres import ClaimRecord, ClaimStorageRecord, session_scope
         with session_scope() as session:
             stmt = select(ClaimStorageRecord).order_by(ClaimStorageRecord.created_at.desc())
             if owner_user_id:
                 stmt = stmt.where(ClaimStorageRecord.owner_user_id == owner_user_id)
             records = session.scalars(stmt).all()
+            # ClaimRecord is updated by every human-review decision.  It is the
+            # authoritative workflow state, while claim_folder_json can be a
+            # legacy upload snapshot from before that decision was recorded.
+            review_status_by_claim_id = {
+                claim.claim_id: claim.status
+                for claim in session.scalars(select(ClaimRecord)).all()
+            }
             for r in records:
                 if r.claim_folder_json:
                     claim_json = dict(r.claim_folder_json)
+                    review_status = review_status_by_claim_id.get(r.claim_id)
+                    if review_status:
+                        claim_json["status"] = review_status
+                        claim_json["workflow_status"] = review_status
                     if r.user_name and "user_name" not in claim_json:
                         claim_json["user_name"] = r.user_name
                     if r.owner_user_id and "owner_user_id" not in claim_json:
