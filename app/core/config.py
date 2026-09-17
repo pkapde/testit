@@ -1,10 +1,59 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import logging
 import os
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
-# Local development convenience only. Production supplies settings through the
-# platform environment, Key Vault, and Managed Identity.
-load_dotenv()
+logger = logging.getLogger(__name__)
+
+
+def _is_production() -> bool:
+    return os.getenv("APP_ENV", "development").strip().lower() in {"production", "prod"}
+
+
+# A local .env is useful on a developer workstation.  Never load it in a
+# deployed service: configuration must come from the hosting environment or
+# Key Vault, so an accidentally packaged local DATABASE_URL cannot point an
+# Azure workload back to localhost.
+if not _is_production():
+    load_dotenv()
+
+
+def _resolve_secret_from_key_vault(secret_name: str | None) -> str | None:
+    """Resolve an optional secret with the workload's managed identity.
+
+    Environment values deliberately take precedence. That lets Azure App
+    Service/Foundry resolve a Key Vault reference into DATABASE_URL without an
+    application-side Key Vault call, while local development keeps using .env.
+    """
+    vault_url = os.getenv("AZURE_KEY_VAULT_URL")
+    if not secret_name or not vault_url:
+        return None
+    try:
+        from azure.identity import DefaultAzureCredential
+        from azure.keyvault.secrets import SecretClient
+
+        return SecretClient(vault_url=vault_url, credential=DefaultAzureCredential()).get_secret(secret_name).value
+    except Exception as exc:
+        logger.warning("Could not resolve configured Key Vault secret %s: %s", secret_name, type(exc).__name__)
+        return None
+
+
+def _database_url() -> str | None:
+    return os.getenv("DATABASE_URL") or _resolve_secret_from_key_vault(os.getenv("DATABASE_URL_SECRET_NAME"))
+
+
+def _phoenix_endpoint() -> str:
+    return os.getenv("PHOENIX_ENDPOINT", "http://127.0.0.1:6006/v1/traces")
+
+
+def _phoenix_enabled() -> bool:
+    enabled = os.getenv("PHOENIX_ENABLED", "false").lower() == "true"
+    host = (urlparse(_phoenix_endpoint()).hostname or "").lower()
+    if enabled and _is_production() and host in {"localhost", "127.0.0.1", "::1"}:
+        logger.warning("Phoenix tracing was disabled because its production endpoint resolves to localhost")
+        return False
+    return enabled
 
 
 @dataclass(frozen=True)
@@ -26,7 +75,7 @@ class Settings:
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
         if origin.strip()
     )
-    database_url: str | None = os.getenv("DATABASE_URL")
+    database_url: str | None = field(default_factory=_database_url)
     # Local-account pilot authentication. Keep disabled while migrating existing
     # demo users, then set AUTH_REQUIRED=true to enforce a signed local session.
     auth_required: bool = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
@@ -47,8 +96,8 @@ class Settings:
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
     # Phoenix is optional and disabled by default. It exports redacted operational
     # metadata over OTLP to an internally hosted Phoenix instance.
-    phoenix_enabled: bool = os.getenv("PHOENIX_ENABLED", "false").lower() == "true"
-    phoenix_endpoint: str = os.getenv("PHOENIX_ENDPOINT", "http://127.0.0.1:6006/v1/traces")
+    phoenix_enabled: bool = field(default_factory=_phoenix_enabled)
+    phoenix_endpoint: str = field(default_factory=_phoenix_endpoint)
     phoenix_project_name: str = os.getenv("PHOENIX_PROJECT_NAME", "contractiq")
     phoenix_service_name: str = os.getenv("PHOENIX_SERVICE_NAME", "contractiq-backend")
     phoenix_capture_content: bool = os.getenv("PHOENIX_CAPTURE_CONTENT", "false").lower() == "true"
